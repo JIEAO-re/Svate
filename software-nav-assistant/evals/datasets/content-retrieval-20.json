@@ -1,0 +1,22 @@
+[
+  { "id": "T01", "app": "Douyin", "task": "Search for \"West Lake scenery\"" },
+  { "id": "T02", "app": "Douyin", "task": "Open the first video result" },
+  { "id": "T03", "app": "Douyin", "task": "Enter comments section" },
+  { "id": "T04", "app": "Douyin", "task": "Return to recommendation feed" },
+  { "id": "T05", "app": "Xiaohongshu", "task": "Search for \"Shanghai food\"" },
+  { "id": "T06", "app": "Xiaohongshu", "task": "Open the first note" },
+  { "id": "T07", "app": "Xiaohongshu", "task": "Switch to \"Image/Text\" tab" },
+  { "id": "T08", "app": "Xiaohongshu", "task": "Return to search result page" },
+  { "id": "T09", "app": "Bilibili", "task": "Search for \"Python beginner\"" },
+  { "id": "T10", "app": "Bilibili", "task": "Open the first video" },
+  { "id": "T11", "app": "Bilibili", "task": "Expand intro section" },
+  { "id": "T12", "app": "Bilibili", "task": "Return to search results" },
+  { "id": "T13", "app": "Browser", "task": "Search for \"Guangzhou weather\"" },
+  { "id": "T14", "app": "Browser", "task": "Open the first result" },
+  { "id": "T15", "app": "Browser", "task": "Return to result list" },
+  { "id": "T16", "app": "Browser", "task": "Open a map-related result link" },
+  { "id": "T17", "app": "Amap", "task": "Search for \"Shanghai Hongqiao Station\"" },
+  { "id": "T18", "app": "Amap", "task": "Open the first place details" },
+  { "id": "T19", "app": "Gallery", "task": "Open the latest screenshot" },
+  { "id": "T20", "app": "Gallery", "task": "Return to the recent items list" }
+]

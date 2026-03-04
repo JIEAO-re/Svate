@@ -1,0 +1,64 @@
+
+> software-nav-assistant@0.1.0 dev
+> next dev
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.3.34:3000
+- Environments: .env.local
+
+✓ Starting...
+Creating turbopack project {
+  dir: 'C:\\Users\\26257\\Desktop\\UI\\software-nav-assistant',
+  testMode: true
+}
+✓ Ready in 890ms
+ POST /api/mobile-agent/telemetry 400 in 1147ms (compile: 1109ms, render: 38ms)
+○ Compiling /api/mobile-agent/telemetry ...
+⨯ ./src/lib/mobile-agent/pipeline.ts:95:9
+Parsing ecmascript source code failed
+[0m [90m 93 |[39m   [90m// guide_media 涓嶅啀闃诲锛氬厛鏋勫缓 response锛坓uide_media: null锛夛紝寮傛鐢熸垚鍚庤惤搴?  const response: NextStepResponse = {[39m
+ [90m 94 |[39m     trace_id[33m:[39m traceId[33m,[39m
+[31m[1m>[22m[39m[90m 95 |[39m     planner[33m:[39m {
+ [90m    |[39m         [31m[1m^[22m[39m
+ [90m 96 |[39m       model[33m:[39m plannerRun[33m.[39mmodel[33m,[39m
+ [90m 97 |[39m       candidates[33m:[39m plannerRun[33m.[39moutput[33m.[39mcandidates[33m,[39m
+ [90m 98 |[39m       latency_ms[33m:[39m plannerRun[33m.[39mlatencyMs[33m,[39m[0m
+
+Expected ';', '}' or <eof>
+
+Import trace:
+  App Route:
+    ./src/lib/mobile-agent/pipeline.ts
+    ./src/app/api/mobile-agent/next-step/route.ts
+
+
+ POST /api/mobile-agent/next-step 500 in 1513ms (compile: 1349ms, render: 164ms)
+
+-----
+[1m[31mFATAL[39m[0m: An unexpected Turbopack error occurred. A panic log has been written to C:\Users\26257\AppData\Local\Temp\next-panic-db6223d765ec46bbb361f4ee87959582.log.
+
+To help make Turbopack better, report this error by clicking here: https://github.com/vercel/next.js/discussions/new?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2F_not-found%2Fpage&body=Turbopack%20version%3A%20%6023c46498%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0ATurbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2F_not-found%2Fpage%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+-----
+
+⨯ ./src/lib/mobile-agent/pipeline.ts:95:9
+Parsing ecmascript source code failed
+[0m [90m 93 |[39m   [90m// guide_media 涓嶅啀闃诲锛氬厛鏋勫缓 response锛坓uide_media: null锛夛紝寮傛鐢熸垚鍚庤惤搴?  const response: NextStepResponse = {[39m
+ [90m 94 |[39m     trace_id[33m:[39m traceId[33m,[39m
+[31m[1m>[22m[39m[90m 95 |[39m     planner[33m:[39m {
+ [90m    |[39m         [31m[1m^[22m[39m
+ [90m 96 |[39m       model[33m:[39m plannerRun[33m.[39mmodel[33m,[39m
+ [90m 97 |[39m       candidates[33m:[39m plannerRun[33m.[39moutput[33m.[39mcandidates[33m,[39m
+ [90m 98 |[39m       latency_ms[33m:[39m plannerRun[33m.[39mlatencyMs[33m,[39m[0m
+
+Expected ';', '}' or <eof>
+
+Import trace:
+  App Route:
+    ./src/lib/mobile-agent/pipeline.ts
+    ./src/app/api/mobile-agent/next-step/route.ts
+
+
+ POST /api/mobile-agent/next-step 500 in 22ms (compile: 12ms, render: 9ms)
+ POST /api/mobile-agent/next-step 400 in 1457ms (compile: 1445ms, render: 11ms)
+ POST /api/mobile-agent/next-step 400 in 30ms (compile: 17ms, render: 12ms)

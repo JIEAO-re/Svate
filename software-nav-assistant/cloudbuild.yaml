@@ -1,0 +1,30 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_IMAGE}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_IMAGE}
+      - --region=${_REGION}
+      - --platform=managed
+      - --no-allow-unauthenticated
+      - --set-env-vars=GOOGLE_GENAI_USE_VERTEXAI=true
+      - --set-secrets=POSTGRES_URL=POSTGRES_URL:latest,INTERNAL_JOB_TOKEN=INTERNAL_JOB_TOKEN:latest
+
+substitutions:
+  _SERVICE: mobile-agent-api
+  _REGION: us-central1
+  _IMAGE: us-central1-docker.pkg.dev/$PROJECT_ID/mobile-agent/mobile-agent-api:latest

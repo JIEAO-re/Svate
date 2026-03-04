@@ -1,0 +1,83 @@
+name: mobile-agent-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  node-lint:
+    name: Lint (Node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: software-nav-assistant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: software-nav-assistant/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  node-test:
+    name: Unit & Contract Tests (Node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: software-nav-assistant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: software-nav-assistant/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  eval-offline:
+    name: Offline Eval Gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: software-nav-assistant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: software-nav-assistant/package-lock.json
+      - run: npm ci
+      - run: npm run eval:offline
+
+  eval-regression:
+    name: Regression Eval Gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: software-nav-assistant
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: software-nav-assistant/package-lock.json
+      - run: npm ci
+      - run: npm run eval:regression
+
+  android:
+    name: Android Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Gradle Unit Tests
+        run: ./gradlew test
