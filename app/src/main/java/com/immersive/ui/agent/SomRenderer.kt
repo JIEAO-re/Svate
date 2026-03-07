@@ -66,23 +66,25 @@ object SomRenderer {
     /**
      * 在截图 Bitmap 上绘制 SoM 标注。
      *
-     * @param screenshotBase64 原始截图的 Base64
+     * @param screenshotBytes 原始截图的 JPEG bytes
      * @param interactiveNodes 已过滤的可交互节点列表
      * @param screenWidth 真实屏幕像素宽度
      * @param screenHeight 真实屏幕像素高度
      * @return SomResult 包含标注图 Base64 和映射表
      */
     fun render(
-        screenshotBase64: String,
+        screenshotBytes: ByteArray,
         interactiveNodes: List<UiNode>,
         screenWidth: Int,
         screenHeight: Int,
     ): SomResult? {
         if (interactiveNodes.isEmpty()) return null
 
-        // 解码原始截图
-        val imageBytes = Base64.decode(screenshotBase64, Base64.NO_WRAP)
-        val originalBitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        val originalBitmap = android.graphics.BitmapFactory.decodeByteArray(
+            screenshotBytes,
+            0,
+            screenshotBytes.size,
+        )
             ?: return null
 
         val bitmapWidth = originalBitmap.width

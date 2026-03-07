@@ -106,12 +106,12 @@ android {
             "NEXT_PUBLIC_MOCK_MODE",
             localBooleanLiteral("NEXT_PUBLIC_MOCK_MODE", false)
         )
-        // 灰度开关：是否在 observation 中发送 screenshot_base64 兼容字段
-        // 服务端迁移完成后可关闭此开关，仅通过 GCS URI 引用截图
+        // 兼容开关：是否额外发送 screenshot_base64 冗余字段
+        // 默认关闭，仅在调试或服务端兼容回退时打开
         buildConfigField(
             "boolean",
             "SEND_SCREENSHOT_BASE64",
-            localBooleanLiteral("SEND_SCREENSHOT_BASE64", true)
+            localBooleanLiteral("SEND_SCREENSHOT_BASE64", false)
         )
         // P0: Auth token for cloud API calls (prevents 401 in production)
         buildConfigField(

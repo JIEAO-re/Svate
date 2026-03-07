@@ -160,8 +160,10 @@ class OpenClawOrchestrator(
     private suspend fun orchestratorLoop() {
         try {
             // 1. 等待服务就绪
-            if (!waitServicesReady()) {
-                postFailed("Services failed to start. Please retry.")
+            val startupFailure = waitServicesReady()
+            if (startupFailure != null) {
+                updatePhase(AgentPhase.FAILED, startupFailure)
+                postFailed(startupFailure)
                 return
             }
 
@@ -231,7 +233,7 @@ class OpenClawOrchestrator(
 
                 // ObservationModule: 异步上传截图到 GCS
                 val gcsUri = observationModule.uploadScreenshotToGcs(
-                    imageBase64 = snapshot.frame.imageBase64,
+                    imageBytes = snapshot.frame.imageBytes,
                     traceId = ctx.traceId ?: "",
                     stepIndex = ctx.stepIndex,
                 )
@@ -341,13 +343,29 @@ class OpenClawOrchestrator(
 
     // ========== 辅助方法 ==========
 
-    private suspend fun waitServicesReady(): Boolean {
+    private suspend fun waitServicesReady(): String? {
         var waitCount = 0
-        while (AgentCaptureService.instance == null && waitCount < 20 && isRunning.get()) {
+        while (
+            waitCount < 20 &&
+            isRunning.get() &&
+            (AgentCaptureService.instance == null || AgentAccessibilityService.instance == null)
+        ) {
             delay(200)
             waitCount++
         }
-        return AgentCaptureService.instance != null && AgentAccessibilityService.instance != null
+        if (!isRunning.get()) {
+            return "Agent startup was cancelled."
+        }
+
+        val missingServices = buildList {
+            if (AgentCaptureService.instance == null) add("screen capture service")
+            if (AgentAccessibilityService.instance == null) add("accessibility service")
+        }
+        return if (missingServices.isEmpty()) {
+            null
+        } else {
+            "Failed to start ${missingServices.joinToString(" and ")}. Please retry."
+        }
     }
 
     private fun passStartupGuard(snapshot: PerceptionSnapshot): Boolean {

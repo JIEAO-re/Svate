@@ -7,19 +7,41 @@ object FrameFingerprint {
     fun build(
         foregroundPackage: String?,
         uiNodes: List<UiNode>,
-        imageBase64: String,
+        imageBytes: ByteArray? = null,
+        imageBase64: String = "",
     ): String {
         val uiSig = uiNodes
             .take(40)
             .joinToString("|") { node ->
                 "${node.packageName}#${node.className}#${node.viewIdResourceName}#${node.text}#${node.contentDesc}#${node.bounds}"
             }
-        val imageHint = if (imageBase64.length <= 128) {
+        val imageHint = when {
+            imageBytes != null && imageBytes.isNotEmpty() -> sampleBytes(imageBytes)
+            imageBase64.isNotBlank() -> sampleText(imageBase64)
+            else -> "no_image"
+        }
+        return sha256("${foregroundPackage.orEmpty()}|$uiSig|$imageHint")
+    }
+
+    private fun sampleBytes(bytes: ByteArray): String {
+        val headCount = minOf(32, bytes.size)
+        val tailStart = maxOf(headCount, bytes.size - 32)
+        val sb = StringBuilder((headCount + (bytes.size - tailStart)) * 2)
+        for (index in 0 until headCount) {
+            sb.append("%02x".format(bytes[index].toInt() and 0xff))
+        }
+        for (index in tailStart until bytes.size) {
+            sb.append("%02x".format(bytes[index].toInt() and 0xff))
+        }
+        return sb.toString()
+    }
+
+    private fun sampleText(imageBase64: String): String {
+        return if (imageBase64.length <= 128) {
             imageBase64
         } else {
             imageBase64.take(64) + imageBase64.takeLast(64)
         }
-        return sha256("${foregroundPackage.orEmpty()}|$uiSig|$imageHint")
     }
 
     private fun sha256(raw: String): String {

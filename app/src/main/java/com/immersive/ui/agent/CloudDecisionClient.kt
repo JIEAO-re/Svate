@@ -226,8 +226,10 @@ class CloudDecisionClient {
                     }
                     // 灰度开关控制：screenshot_base64 兼容字段
                     // 服务端迁移完成后可通过 BuildConfig.SEND_SCREENSHOT_BASE64 关闭
-                    if (sendScreenshotBase64 && frames.last().imageBase64.isNotBlank()) {
-                        put("screenshot_base64", frames.last().imageBase64)
+                    if (sendScreenshotBase64) {
+                        frames.last().inlineImageBase64OrNull()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { put("screenshot_base64", it) }
                     }
                     put("ui_nodes", toUiNodesJson(uiNodes))
                     put("previous_action_result", previousResult)
@@ -379,7 +381,12 @@ class CloudDecisionClient {
                     if (!frame.gcsUri.isNullOrBlank()) {
                         put("gcs_uri", frame.gcsUri)
                     } else {
-                        put("image_base64", frame.imageBase64)
+                        val inlineBase64 = frame.inlineImageBase64OrNull()
+                        if (!inlineBase64.isNullOrBlank()) {
+                            put("image_base64", inlineBase64)
+                        } else {
+                            throw IllegalStateException("frame ${frame.frameId} is missing both gcsUri and inline image payload")
+                        }
                     }
                     put("ui_signature", frame.uiSignature)
                 },

@@ -2,8 +2,6 @@ package com.immersive.ui.guide
 
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.content.pm.ResolveInfo
 
 /**
  * 已安装应用的精简信息
@@ -15,7 +13,7 @@ data class AppInfo(
 
 /**
  * 扫描设备上所有用户可见（有 Launcher 图标）的已安装应用。
- * 需要 AndroidManifest 声明 QUERY_ALL_PACKAGES 权限。
+ * 仅通过 Launcher 可见性查询，不依赖 QUERY_ALL_PACKAGES。
  */
 object InstalledAppScanner {
 
@@ -27,7 +25,7 @@ object InstalledAppScanner {
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        val resolveInfos: List<ResolveInfo> = pm.queryIntentActivities(mainIntent, PackageManager.MATCH_ALL)
+        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
 
         val selfPackage = context.packageName
 

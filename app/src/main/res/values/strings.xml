@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">svate</string>
     <string name="accessibility_service_description">svate 需要无障碍权限来读取屏幕内容并自动执行操作（点击、滑动等），从而帮助您完成手机任务。</string>
+    <string name="menu_label">菜单</string>
+    <string name="action_stop">停止</string>
+    <string name="action_done">完成</string>
+    <string name="action_confirm">确认</string>
+    <string name="action_confirm_clear">确认清除</string>
 </resources>

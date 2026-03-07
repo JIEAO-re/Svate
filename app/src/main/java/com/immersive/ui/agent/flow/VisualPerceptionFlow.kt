@@ -161,7 +161,7 @@ class VisualPerceptionFlow(
         val fingerprint = FrameFingerprint.build(
             foregroundPackage = foregroundPackage,
             uiNodes = prunedNodes,
-            imageBase64 = frame.imageBase64,
+            imageBytes = frame.imageBytes,
         )
         if (fingerprint == lastFingerprint && config.enableDedup) {
             return // 帧未变化，跳过
@@ -173,7 +173,7 @@ class VisualPerceptionFlow(
         val somResult = if (config.enableSom) {
             val interactiveNodes = SomRenderer.filterInteractiveNodes(prunedNodes)
             SomRenderer.render(
-                screenshotBase64 = frame.imageBase64,
+                screenshotBytes = frame.imageBytes ?: return,
                 interactiveNodes = interactiveNodes,
                 screenWidth = screenWidth,
                 screenHeight = screenHeight,

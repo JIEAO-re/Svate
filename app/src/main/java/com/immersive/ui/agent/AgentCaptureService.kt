@@ -308,7 +308,8 @@ class AgentCaptureService : Service() {
     }
 
     /**
-     * 优先使用 captureBytes 路径，同时生成 Base64 以兼容旧代码。
+     * 优先使用 captureBytes 路径，默认不生成 Base64；
+     * 仅在兼容链路按需从 imageBytes 派生。
      */
     suspend fun captureFrame(uiSignature: String): CapturedFrame? {
         val bytes = captureBytes() ?: return null
@@ -316,7 +317,7 @@ class AgentCaptureService : Service() {
         return CapturedFrame(
             frameId = "f_${now}_${(1000..9999).random()}",
             tsMs = now,
-            imageBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
+            imageBase64 = "",
             uiSignature = uiSignature.ifBlank { "unknown" },
             imageBytes = bytes,
         )

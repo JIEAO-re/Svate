@@ -1,5 +1,7 @@
 ﻿package com.immersive.ui.agent
 
+import android.util.Base64
+
 enum class TaskMode {
     GENERAL,
     SEARCH,
@@ -101,12 +103,22 @@ data class ActionSelector(
 data class CapturedFrame(
     val frameId: String,
     val tsMs: Long,
-    val imageBase64: String,
+    val imageBase64: String = "",
     val uiSignature: String,
-    /** Raw JPEG bytes — preferred over imageBase64 for GCS upload to avoid Base64 roundtrip */
+    /** Raw JPEG bytes — primary transport for GCS upload and local processing. */
     val imageBytes: ByteArray? = null,
     val gcsUri: String? = null,
-)
+) {
+    private val inlineImageBase64 by lazy(LazyThreadSafetyMode.NONE) {
+        when {
+            imageBase64.isNotBlank() -> imageBase64
+            imageBytes != null -> Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+            else -> null
+        }
+    }
+
+    fun inlineImageBase64OrNull(): String? = inlineImageBase64
+}
 
 data class IntentSpec(
     val action: String,

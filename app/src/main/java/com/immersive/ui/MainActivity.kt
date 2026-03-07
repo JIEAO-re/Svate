@@ -92,6 +92,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -218,7 +219,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         textToSpeech = TextToSpeech(this, this)
         mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
 
-        // 鎵弿宸插畨瑁呭簲鐢ㄥ垪琛ㄥ苟娉ㄥ叆 AI 寮曟搸
+        // 扫描已安装应用列表并注入 AI 引擎
         val apps = InstalledAppScanner.getInstalledApps(this)
         GuideAiEngines.setInstalledApps(apps)
 
@@ -271,7 +272,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-        // 鍔犺浇鍘嗗彶瀵硅瘽
+        // 加载历史对话
         chatSessions.addAll(ChatStorage.loadSessions(this))
         if (chatSessions.isEmpty()) {
             startNewSession()
@@ -280,6 +281,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             switchSession(chatSessions.first().id)
         }
 
+        observeAgentViewModelEvents()
+        observeAgentStopRequests()
+
         setContent {
             UINavTheme {
                 val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -287,7 +291,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                 val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
-                // 鐩戝惉閿欒浜嬩欢 鈫?鏄剧ず Snackbar
+                // 监听错误事件并显示 Snackbar
                 LaunchedEffect(viewModel) {
                     viewModel.errorFlow.collect { msg ->
                         snackbarHostState.showSnackbar(msg)
@@ -501,7 +505,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
                                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAECF0)))
 
-                                // 鍏充簬 Svate
+                                // 关于 Svate
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -515,13 +519,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         },
                         confirmButton = {
                             TextButton(onClick = { showSettingsDialog = false }) {
-                                Text("瀹屾垚")
+                                Text(stringResource(R.string.action_done))
                             }
                         },
                     )
                 }
 
-                // 浜屾纭娓呴櫎瀵硅瘽妗?
+                // 二次确认清除对话框
                 if (showClearConfirm) {
                     AlertDialog(
                         onDismissRequest = { showClearConfirm = false },
@@ -534,7 +538,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 UserProfileStore.clearProfile(this@MainActivity)
                                 startNewSession()
                                 showClearConfirm = false
-                            }) { Text("纭娓呴櫎", color = Color(0xFFEF4444)) }
+                            }) { Text(stringResource(R.string.action_confirm_clear), color = Color(0xFFEF4444)) }
                         },
                         dismissButton = {
                             TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
@@ -543,7 +547,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
             }
         }
-        observeAgentStopRequests()
     }
 
     override fun onDestroy() {
@@ -701,25 +704,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
      * 启动 Agent 自主模式 — 委托给 ViewModel（跨配置变更存活）
      */
     private fun startAgent(plan: GoalChatResult) {
-        val viewModel = mainViewModel
-
-        // 订阅 ViewModel 的一次性事件
-        lifecycleScope.launch {
-            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                viewModel.agentMessages.collect { message ->
-                    messages += UiMessage(createId(), "assistant", message)
-                }
-            }
-        }
-        lifecycleScope.launch {
-            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                viewModel.narrationEvents.collect { text ->
-                    speakAssistant(text)
-                }
-            }
-        }
-
-        viewModel.startAgent(plan)
+        mainViewModel.startAgent(plan)
         try { AgentStopOverlayService.start(this) } catch (_: Exception) {}
     }
 
@@ -731,6 +716,24 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             homeworkPolicy = plan.homeworkPolicy,
             askOnUncertain = plan.askOnUncertain,
         )
+    }
+
+    private fun observeAgentViewModelEvents() {
+        val viewModel = mainViewModel
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.agentMessages.collect { message ->
+                        messages += UiMessage(createId(), "assistant", message)
+                    }
+                }
+                launch {
+                    viewModel.narrationEvents.collect { text ->
+                        speakAssistant(text)
+                    }
+                }
+            }
+        }
     }
 
     private fun stopGuide() {
@@ -888,7 +891,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         session.messages.addAll(messages.map { ChatMsg(it.role, it.content) })
 
         ioExecutor.execute {
-            // 1. 鐢熸垚鎬荤粨
+            // 1. 生成总结
             val summary = ChatStorage.generateSummary(session.messages)
             if (summary.isNotBlank()) {
                 session.summary = summary
@@ -899,14 +902,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 session.title = title
             }
 
-            // 3. 鎻愬彇鐢ㄦ埛鍋忓ソ
+            // 3. 提取用户偏好
             UserProfileStore.extractAndMerge(this@MainActivity, session.messages)
 
-            // 4. 淇濆瓨
+            // 4. 保存
             ChatStorage.saveSessions(this@MainActivity, chatSessions.toList())
 
             runOnUiThread {
-                // 瑙﹀彂 recompose
+                // 触发 recompose
                 val idx = chatSessions.indexOf(session)
                 if (idx >= 0) {
                     chatSessions[idx] = session.copy()
@@ -962,7 +965,7 @@ private fun GuideScreen(
             .fillMaxSize()
             .background(Color.Transparent),
     ) {
-        // ===== 椤舵爮 =====
+        // ===== 顶栏 =====
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -974,7 +977,7 @@ private fun GuideScreen(
             IconButton(onClick = onOpenDrawer, modifier = Modifier.size(36.dp)) {
                 Icon(
                     imageVector = Icons.Default.Menu,
-                    contentDescription = "鑿滃崟",
+                    contentDescription = stringResource(R.string.menu_label),
                     tint = Color(0xFF8E8EA0),
                 )
             }
@@ -1013,7 +1016,7 @@ private fun GuideScreen(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     Text(
-                        text = "鍋滄",
+                        text = stringResource(R.string.action_stop),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFFEF4444),
                         fontWeight = FontWeight.Bold,
@@ -1029,9 +1032,9 @@ private fun GuideScreen(
                 .background(Color(0xFFEAECF0)),
         )
 
-        // ===== Agent 鐘舵€?/ 纭鎻愮ず =====
+        // ===== Agent 状态 / 确认提示 =====
         if (isAgentMode && agentPhaseText.isNotBlank()) {
-            val isWarning = agentPhaseText.startsWith("鈿狅笍")
+            val isWarning = agentPhaseText.startsWith("⚠️")
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1053,7 +1056,11 @@ private fun GuideScreen(
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10A37F)),
                             contentPadding = PaddingValues(vertical = 8.dp),
                         ) {
-                            Text("纭", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                stringResource(R.string.action_confirm),
+                                fontWeight = FontWeight.SemiBold,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
                         }
                         OutlinedButton(
                             onClick = { onConfirmAction(false) },
@@ -1069,7 +1076,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 涓嶇‘瀹氭椂鏂规閫夋嫨 =====
+        // ===== 不确定时方案选择 =====
         if (isAgentMode && pendingDecisionRequest != null) {
             Column(
                 modifier = Modifier
@@ -1129,7 +1136,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 鑱婂ぉ鍖哄煙 =====
+        // ===== 聊天区域 =====
         if (messages.size <= 1) {
             Column(
                 modifier = Modifier
@@ -1234,7 +1241,7 @@ private fun GuideScreen(
                     }
                 }
 
-                // 鎵撳瓧鍔ㄧ敾
+                // 打字动画
                 if (isTyping) {
                     item(key = "typing_indicator") {
                         Row(
@@ -1258,7 +1265,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 鍊欓€夊簲鐢紙绠€绾﹀垪琛級 =====
+        // ===== 候选应用（简洁列表） =====
         if (candidateApps.isNotEmpty()) {
             Column(
                 modifier = Modifier
@@ -1303,7 +1310,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 寮曞灏辩华鎻愮ず =====
+        // ===== 引导就绪提示 =====
         if (readyPlan != null) {
             Column(
                 modifier = Modifier
@@ -1618,6 +1625,5 @@ private fun buildMarkdownAnnotatedString(text: String) = buildAnnotatedString {
         if (lineIdx < lines.lastIndex) append("\n")
     }
 }
-
 
 

@@ -26,7 +26,7 @@ object IntentResolver {
      * key = 包名, value = { query -> DeepLink URI 字符串 }
      */
     private val DEEPLINK_REGISTRY: Map<String, (String) -> String> = mapOf(
-        // 寰俊锛堜緷璧栧畼鏂瑰鑸崗璁紝涓嶆敮鎸佹椂浼氳嚜鍔ㄩ€€鍖?
+        // 微信（依赖官方导航协议，不支持时会自动退化）
         "com.tencent.mm" to { q ->
             "weixin://dl/search?query=${Uri.encode(q)}"
         },
