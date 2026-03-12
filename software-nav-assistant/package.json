@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint && npm run lint:encoding",
     "lint:encoding": "node scripts/check-encoding.js",
     "eval:offline": "node evals/offline-eval.js",
     "eval:regression": "node evals/regression-eval.js",

@@ -19,13 +19,7 @@ import {
 import { maybeGenerateGuideImage } from "@/lib/mobile-agent/guide-media";
 import { enqueueSessionRecapVideo } from "@/lib/mobile-agent/session-recap-video";
 
-// ============================================================================
-// 鎬ц兘浼樺寲锛歡uide media 鍜?persistence 涓嶉樆濉炲湪绾垮喅绛栬矾寰?// ============================================================================
-// 1. guideMedia 鐢熸垚鏀逛负 fire-and-forget锛屽厛杩斿洖 response 鍐嶅紓姝ヨ惤搴?// 2. 鎵€鏈?persistence 鍐欏叆骞惰鎵ц锛屼笉涓茶绛夊緟
-// 3. session recap video 宸茬粡鏄?fire-and-forget锛坴oid锛?// ============================================================================
-
-/**
- * 寮傛钀藉簱 guide media 缁撴灉锛屼笉闃诲涓昏矾寰勩€? * 澶辫触闈欓粯鍚炴帀锛岄伩鍏嶅奖鍝嶅湪绾垮喅绛栥€? */
+// Guide media and persistence should not stall the online decision path.
 function fireAndForgetGuideMedia(params: {
   traceId: string;
   request: NextStepRequest;
@@ -90,7 +84,6 @@ export async function runMobileAgentPipeline(
   const observationSource = request.observation.media_window?.source ?? "SCREENSHOT";
   const frameCount = request.observation.media_window?.frames.length ?? (request.observation.screenshot_base64 ? 1 : 0);
 
-  // guide_media 涓嶅啀闃诲锛氬厛鏋勫缓 response锛坓uide_media: null锛夛紝寮傛鐢熸垚鍚庤惤搴?
   const response: NextStepResponse = {
     trace_id: traceId,
     planner: {
@@ -126,7 +119,7 @@ export async function runMobileAgentPipeline(
 
   const parsed = NextStepResponseSchema.parse(response);
 
-  // --- 异步 fire-and-forget：Next.js after 确保响应后任务继续执行 ---
+  // Keep guide media and recap work out of the response path.
   after(() => {
     fireAndForgetGuideMedia({
       traceId,
@@ -145,7 +138,7 @@ export async function runMobileAgentPipeline(
     }
   });
 
-  // --- 并行落库：telemetry / shadow diff / live metric ---
+  // Persist the core records before returning so turn state stays consistent.
   const shadowDiff = compareShadowActions(request.shadow_control_action, parsed.final_action);
   const pathTelemetry = {
     used_target_som_id: parsed.final_action.target_som_id != null,
@@ -207,10 +200,10 @@ export async function runMobileAgentPipeline(
     }),
   );
 
-  // 骞惰鎵ц鎵€鏈?persistence 鍐欏叆锛屼换涓€澶辫触涓嶅奖鍝嶈繑鍥?  await Promise.allSettled(persistenceJobs);
+  // Persist core records in parallel; failures should not block the response.
+  await Promise.allSettled(persistenceJobs);
 
-  // ============================================================================
-  // 鎴愭湰涓庡欢杩熼仴娴嬶細璁板綍姣忚疆鐨?token 鐢ㄩ噺浼扮畻銆佸欢杩熴€佸抚鏁?  // ============================================================================
+  // Record per-turn cost telemetry after the main response is ready.
   const totalLatencyMs = plannerRun.latencyMs + reviewerRun.latencyMs;
   const estimatedPromptTokens = Math.ceil(
     (JSON.stringify(request.observation.ui_nodes).length + (request.goal?.length ?? 0)) / 4,

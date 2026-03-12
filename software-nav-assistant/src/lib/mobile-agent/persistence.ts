@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { TelemetryEvent } from "@/lib/schemas/mobile-agent";
-import { POSTGRES_URL } from "@/lib/mobile-agent/env";
+import { POSTGRES_URL, assertPersistenceEnv } from "@/lib/mobile-agent/env";
 
 type TurnEventRecord = {
   trace_id: string;
@@ -74,9 +74,11 @@ type MediaJobRecord = {
 };
 
 let pool: Pool | null = null;
+const TELEMETRY_BATCH_SIZE = 100;
 
 function getPool(): Pool {
   if (pool) return pool;
+  assertPersistenceEnv();
 
   pool = new Pool({
     connectionString: POSTGRES_URL,
@@ -96,7 +98,7 @@ export async function saveTurnEvent(record: TurnEventRecord) {
   try {
     await client.query("BEGIN");
 
-    await client.query(
+    const insertTurnEvent = await client.query(
       `
       INSERT INTO agent_turn_events (
         trace_id,
@@ -116,6 +118,8 @@ export async function saveTurnEvent(record: TurnEventRecord) {
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::timestamptz
       )
+      ON CONFLICT (trace_id) DO NOTHING
+      RETURNING trace_id
       `,
       [
         record.trace_id,
@@ -134,6 +138,11 @@ export async function saveTurnEvent(record: TurnEventRecord) {
         record.created_at,
       ],
     );
+
+    if (insertTurnEvent.rowCount === 0) {
+      await client.query("COMMIT");
+      return;
+    }
 
     await client.query(
       `
@@ -176,6 +185,7 @@ export async function saveLiveTurnMetric(record: LiveTurnMetricRecord) {
       observation_source,
       created_at
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz)
+    ON CONFLICT (trace_id) DO NOTHING
     `,
     [
       record.trace_id,
@@ -297,6 +307,7 @@ export async function saveShadowDiff(record: ShadowDiffRecord) {
       candidate_would_fail_reason,
       created_at
     ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
+    ON CONFLICT (trace_id) DO NOTHING
     `,
     [
       record.trace_id,
@@ -317,7 +328,22 @@ export async function saveTelemetryEvents(events: TelemetryEvent[]) {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    for (const event of events) {
+    for (let offset = 0; offset < events.length; offset += TELEMETRY_BATCH_SIZE) {
+      const batch = events.slice(offset, offset + TELEMETRY_BATCH_SIZE);
+      const values: Array<string | number | null> = [];
+      const rows = batch.map((event, index) => {
+        const baseIndex = index * 6;
+        values.push(
+          event.trace_id,
+          event.session_id,
+          event.turn_index,
+          event.event_type,
+          JSON.stringify(event.payload),
+          event.ts ?? null,
+        );
+        return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}::jsonb, COALESCE($${baseIndex + 6}::timestamptz, NOW()))`;
+      });
+
       await client.query(
         `
         INSERT INTO agent_telemetry_events (
@@ -327,16 +353,9 @@ export async function saveTelemetryEvents(events: TelemetryEvent[]) {
           event_type,
           payload,
           ts
-        ) VALUES ($1, $2, $3, $4, $5::jsonb, COALESCE($6::timestamptz, NOW()))
+        ) VALUES ${rows.join(", ")}
         `,
-        [
-          event.trace_id,
-          event.session_id,
-          event.turn_index,
-          event.event_type,
-          JSON.stringify(event.payload),
-          event.ts ?? null,
-        ],
+        values,
       );
     }
     await client.query("COMMIT");

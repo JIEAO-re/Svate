@@ -7,20 +7,14 @@ import com.immersive.ui.agent.TelemetryReporter
 import org.json.JSONObject
 
 /**
- * 遥测模块：遥测上报
- *
- * 从 OpenClawOrchestrator 拆分而来，负责：
- * - session_start / session_end 事件上报
- * - 步骤级遥测（可扩展）
+ * Reports session-level telemetry for the orchestrator lifecycle.
  */
 class TelemetryModule(
     context: Context,
 ) {
     private val reporter = TelemetryReporter(context)
 
-    /**
-     * 上报 session 开始事件
-     */
+    /** Report the start of a session. */
     fun reportSessionStart(ctx: AgentContext) {
         reporter.report(
             sessionId = ctx.traceId ?: "sess_unknown",
@@ -36,9 +30,7 @@ class TelemetryModule(
         )
     }
 
-    /**
-     * 上报 session 结束事件
-     */
+    /** Report the end of a session. */
     fun reportSessionEnd(ctx: AgentContext) {
         reporter.report(
             sessionId = ctx.traceId ?: "sess_unknown",
@@ -53,9 +45,7 @@ class TelemetryModule(
         )
     }
 
-    /**
-     * 通用事件上报
-     */
+    /** Report an arbitrary telemetry event. */
     fun reportEvent(
         sessionId: String,
         traceId: String,

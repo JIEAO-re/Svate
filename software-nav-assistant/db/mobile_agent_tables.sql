@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS agent_turn_events (
 
 CREATE INDEX IF NOT EXISTS idx_agent_turn_events_session_turn
   ON agent_turn_events(session_id, turn_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_turn_events_trace_id
+  ON agent_turn_events(trace_id);
 
 CREATE TABLE IF NOT EXISTS agent_session_summary (
   session_id TEXT PRIMARY KEY,
@@ -41,6 +43,8 @@ CREATE TABLE IF NOT EXISTS agent_shadow_diff (
 
 CREATE INDEX IF NOT EXISTS idx_agent_shadow_diff_session_turn
   ON agent_shadow_diff(session_id, turn_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_shadow_diff_trace_id
+  ON agent_shadow_diff(trace_id);
 
 CREATE TABLE IF NOT EXISTS agent_telemetry_events (
   id BIGSERIAL PRIMARY KEY,
@@ -70,6 +74,8 @@ CREATE TABLE IF NOT EXISTS agent_live_turn_metrics (
 
 CREATE INDEX IF NOT EXISTS idx_agent_live_turn_metrics_session_turn
   ON agent_live_turn_metrics(session_id, turn_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_live_turn_metrics_trace_id
+  ON agent_live_turn_metrics(trace_id);
 
 CREATE TABLE IF NOT EXISTS agent_generated_media (
   id BIGSERIAL PRIMARY KEY,

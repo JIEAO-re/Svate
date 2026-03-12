@@ -10,6 +10,8 @@ import {
   GUIDE_VIDEO_MODEL,
   INTERNAL_JOB_TOKEN,
   SESSION_RECAP_JOB_URL,
+  assertGuideMediaEnv,
+  assertInternalJobEnv,
 } from "@/lib/mobile-agent/env";
 import { createMediaJob, updateMediaJob } from "@/lib/mobile-agent/persistence";
 
@@ -56,6 +58,8 @@ export async function enqueueSessionRecapVideo(params: {
     return jobId;
   }
 
+  assertInternalJobEnv();
+
   const client = getCloudTasksClient();
   const parent = client.queuePath(CLOUD_TASKS_PROJECT, CLOUD_TASKS_LOCATION, CLOUD_TASKS_QUEUE);
   const headers: Record<string, string> = {
@@ -96,6 +100,7 @@ export async function processSessionRecapVideoJob(payload: SessionRecapPayload) 
   if (!ENABLE_SESSION_RECAP_VIDEO) return;
 
   try {
+    assertGuideMediaEnv();
     const ai = getGenAIClient();
     const model = await resolveModelWithFallback(GUIDE_VIDEO_MODEL, ["veo-2.0-generate-001"]);
     const operation = await ai.models.generateVideos({

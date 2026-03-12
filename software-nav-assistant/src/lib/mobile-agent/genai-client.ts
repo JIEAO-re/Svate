@@ -7,6 +7,7 @@ import {
   OPENAI_COMPAT_API_KEY,
   OPENAI_COMPAT_BASE_URL,
   OPENAI_COMPAT_ENABLED,
+  assertGenAiEnv,
 } from "@/lib/mobile-agent/env";
 
 type GenerateContentParams = {
@@ -263,6 +264,7 @@ function createOpenAICompatClient(): GenAIClientLike {
 
 export function getGenAIClient(): GenAIClientLike {
   if (client) return client;
+  assertGenAiEnv();
 
   if (OPENAI_COMPAT_ENABLED) {
     client = createOpenAICompatClient();

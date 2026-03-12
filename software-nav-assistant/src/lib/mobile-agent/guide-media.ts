@@ -5,7 +5,9 @@ import {
   GUIDE_IMAGE_MODEL,
   GUIDE_MEDIA_BUCKET,
   GUIDE_MEDIA_SIGNED_URL_TTL_SEC,
+  assertGuideMediaEnv,
 } from "@/lib/mobile-agent/env";
+import { getStorageClient } from "@/lib/mobile-agent/cloud-storage";
 import { ActionCommand, NextStepRequest } from "@/lib/schemas/mobile-agent";
 
 const ELIGIBLE_INTENTS = new Set([
@@ -18,7 +20,7 @@ let storage: Storage | null = null;
 
 function getStorage(): Storage {
   if (storage) return storage;
-  storage = new Storage();
+  storage = getStorageClient();
   return storage;
 }
 
@@ -44,6 +46,7 @@ async function uploadImageToCloudStorage(params: {
   imageBase64: string;
   contentType: string;
 }) {
+  assertGuideMediaEnv();
   const client = getStorage();
   const bucket = client.bucket(GUIDE_MEDIA_BUCKET);
   const objectName = `guide-images/${params.sessionId}/${params.turnIndex}_${params.traceId}.jpg`;

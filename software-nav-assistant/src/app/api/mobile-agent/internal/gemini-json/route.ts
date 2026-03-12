@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getGenAIClient } from "@/lib/mobile-agent/genai-client";
-import { LEGACY_DEMO_MODEL, INTERNAL_JOB_TOKEN } from "@/lib/mobile-agent/env";
+import { LEGACY_DEMO_MODEL } from "@/lib/mobile-agent/env";
+import { verifyInternalJobAuth } from "@/lib/mobile-agent/internal-auth";
 
 const RequestSchema = z.object({
   prompt: z.string().min(1).max(50_000),
@@ -13,22 +14,16 @@ function cleanJsonText(raw: string): string {
   return match ? match[1].trim() : raw.trim();
 }
 
-function verifyInternalAuth(req: Request): boolean {
-  // In non-production, allow requests when INTERNAL_JOB_TOKEN is not configured
-  if (!INTERNAL_JOB_TOKEN) {
-    if (process.env.NODE_ENV === "production") return false;
-    return true;
-  }
-  const authHeader = req.headers.get("authorization")?.trim() || "";
-  return authHeader === `Bearer ${INTERNAL_JOB_TOKEN}`;
-}
-
 export async function POST(req: Request) {
-  if (!verifyInternalAuth(req)) {
+  const authResult = verifyInternalJobAuth(req, {
+    endpoint: "/api/mobile-agent/internal/gemini-json",
+  });
+  if (!authResult.valid) {
     return NextResponse.json(
       {
         success: false,
         error: "unauthorized_internal_job",
+        details: authResult.error,
       },
       { status: 401 },
     );

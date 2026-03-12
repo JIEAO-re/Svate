@@ -149,7 +149,7 @@ fun Modifier.bouncyClickable(
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    
+
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.92f else 1f,
         animationSpec = spring(
@@ -166,7 +166,7 @@ fun Modifier.bouncyClickable(
         }
         .clickable(
             interactionSource = interactionSource,
-            indication = null, 
+            indication = null,
             enabled = enabled,
             onClick = onClick
         )

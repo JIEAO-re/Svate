@@ -5,10 +5,7 @@ const root = process.cwd();
 
 const scanTargets = [
   path.join(root, "src"),
-  path.resolve(root, "..", "app", "src", "main", "java", "com", "immersive", "ui", "guide", "GuideAiEngines.kt"),
-  path.resolve(root, "..", "app", "src", "main", "java", "com", "immersive", "ui", "MainActivity.kt"),
-  path.resolve(root, "..", "app", "src", "main", "java", "com", "immersive", "ui", "MainViewModel.kt"),
-  path.resolve(root, "..", "app", "src", "main", "res", "values", "strings.xml"),
+  path.resolve(root, "..", "app", "src", "main"),
 ];
 
 const sourceExtensions = new Set([".ts", ".tsx", ".kt", ".xml"]);

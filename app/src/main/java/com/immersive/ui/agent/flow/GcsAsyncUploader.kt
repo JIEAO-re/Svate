@@ -23,17 +23,10 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * P1/P2 媒体异步化：GCS 预签名 URL 旁路上传器
+ * Uploads screenshots to GCS through a signed URL.
  *
- * 架构设计：
- * - 主线程不阻塞：所有上传操作在 Dispatchers.IO 协程池执行
- * - 预签名 URL：云端下发 signed URL，Android 直传 GCS，绕过 Cloud Run 带宽瓶颈
- * - 引用传递：上传完成后返回 gs://bucket/path URI，云端通过 URI 拉取
- * - 并发控制：Semaphore 限制同时上传数，防止 OOM
- * - 重试机制：指数退避重试，最多 3 次
- *
- * 数据流：
- * Frame/Screenshot -> requestSignedUrl() -> uploadToGcs() -> gs:// URI -> Cloud Decision
+ * The uploader keeps network work on Dispatchers.IO, limits concurrency, and
+ * returns a gs:// URI that the cloud decision path can reference later.
  */
 class GcsAsyncUploader(
     private val scope: CoroutineScope,
@@ -46,7 +39,7 @@ class GcsAsyncUploader(
         private const val CONTENT_TYPE_WEBP = "image/webp"
     }
 
-    // ========== 输出流 ==========
+    // Output streams.
     private val _uploadResults = MutableSharedFlow<UploadResult>(
         replay = 0,
         extraBufferCapacity = 16,
@@ -57,21 +50,19 @@ class GcsAsyncUploader(
     private val _state = MutableStateFlow(UploaderState.IDLE)
     val state: StateFlow<UploaderState> = _state.asStateFlow()
 
-    // ========== 内部状态 ==========
+    // Internal state.
     private val uploadSemaphore = Semaphore(config.maxConcurrentUploads)
     private val pendingUploads = ConcurrentHashMap<String, Job>()
     private val uploadCounter = AtomicLong(0)
 
-    // 预签名 URL 服务端点（由云端提供）
+    // Signed URL endpoint provided by the cloud service.
     private var signedUrlEndpoint: String = config.signedUrlEndpoint
 
     fun setSignedUrlEndpoint(endpoint: String) {
         signedUrlEndpoint = endpoint
     }
 
-    /**
-     * 异步上传图片到 GCS
-     */
+    /** Upload a frame asynchronously. */
     fun uploadAsync(
         imageBytes: ByteArray,
         contentType: String = CONTENT_TYPE_JPEG,
@@ -99,9 +90,7 @@ class GcsAsyncUploader(
         return handle
     }
 
-    /**
-     * 同步上传（阻塞调用方协程）
-     */
+    /** Upload a frame synchronously within the caller coroutine. */
     suspend fun uploadSync(
         imageBytes: ByteArray,
         contentType: String = CONTENT_TYPE_JPEG,
@@ -196,11 +185,13 @@ class GcsAsyncUploader(
                 connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.setRequestProperty("Content-Type", "application/json")
-                // P0 FIX: Auth header for GCS signed-url endpoint
+
+                // The API uses the same auth token as the other mobile-agent routes.
                 val authToken = com.immersive.ui.BuildConfig.MOBILE_AGENT_AUTH_TOKEN
                 if (authToken.isNotBlank()) {
                     connection.setRequestProperty("Authorization", "Bearer $authToken")
                 }
+
                 connection.connectTimeout = config.connectTimeoutMs.toInt()
                 connection.readTimeout = config.readTimeoutMs.toInt()
                 connection.doOutput = true
@@ -271,7 +262,7 @@ class GcsAsyncUploader(
     }
 }
 
-// ========== 数据类 ==========
+// Data types.
 
 data class GcsUploaderConfig(
     val signedUrlEndpoint: String = com.immersive.ui.BuildConfig.MOBILE_AGENT_BASE_URL + "/api/gcs/signed-url",

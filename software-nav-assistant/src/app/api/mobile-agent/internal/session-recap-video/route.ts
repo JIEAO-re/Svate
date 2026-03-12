@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { INTERNAL_JOB_TOKEN } from "@/lib/mobile-agent/env";
 import {
   processSessionRecapVideoJob,
   type SessionRecapPayload,
 } from "@/lib/mobile-agent/session-recap-video";
+import { verifyInternalJobAuth } from "@/lib/mobile-agent/internal-auth";
 
 const SessionRecapPayloadSchema = z.object({
   job_id: z.string().min(1),
@@ -15,22 +15,16 @@ const SessionRecapPayloadSchema = z.object({
 
 export const maxDuration = 30;
 
-function verifyInternalAuth(req: Request): boolean {
-  // In non-production, allow requests when INTERNAL_JOB_TOKEN is not configured
-  if (!INTERNAL_JOB_TOKEN) {
-    if (process.env.NODE_ENV === "production") return false;
-    return true;
-  }
-  const authHeader = req.headers.get("authorization")?.trim() || "";
-  return authHeader === `Bearer ${INTERNAL_JOB_TOKEN}`;
-}
-
 export async function POST(req: Request) {
-  if (!verifyInternalAuth(req)) {
+  const authResult = verifyInternalJobAuth(req, {
+    endpoint: "/api/mobile-agent/internal/session-recap-video",
+  });
+  if (!authResult.valid) {
     return NextResponse.json(
       {
         success: false,
         error: "unauthorized_internal_job",
+        details: authResult.error,
       },
       { status: 401 },
     );
