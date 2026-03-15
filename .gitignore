@@ -1,12 +1,7 @@
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.idea/
 .DS_Store
 /build
 /captures
@@ -20,7 +15,6 @@ local.properties
 .env.local
 
 # local tooling and network profiles
-.idea/vcs.xml
 Caddyfile.subscription
 LX专用Tokyo.yaml
 LX专用Tokyo.yaml.bak.*

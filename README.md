@@ -48,6 +48,10 @@ See [docs/build-matrix.md](docs/build-matrix.md) for the validated toolchain bas
 - configure API keys, database URLs, and internal tokens through environment variables or your secret manager
 - this repository only keeps `.env.example` as a template
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, validation commands, and PR expectations.
+
 ## License
 
 This repository uses the license in [LICENSE](LICENSE).
