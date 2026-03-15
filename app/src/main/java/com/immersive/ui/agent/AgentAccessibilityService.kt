@@ -22,10 +22,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
 /**
- * Agent 无障碍服务，提供 UI 树读取与操作执行能力。
+ * Accessibility service for the agent, providing UI tree access and action execution.
  *
- * 该服务由系统管理生命周期，通过静态 instance 给 OpenClawOrchestrator（Svate 编排器）调用。
- * 用户需要在系统设置中手动开启此服务。
+ * The system owns this service lifecycle, and OpenClawOrchestrator uses the static instance.
+ * The user must enable the service manually in system settings.
  */
 class AgentAccessibilityService : AccessibilityService() {
 
@@ -50,16 +50,17 @@ class AgentAccessibilityService : AccessibilityService() {
             private set
 
         /**
-         * 检查无障碍服务是否已启用。
+         * Check whether the accessibility service is enabled.
          *
-         * 安全加固：不仅靠静态 instance，还通过系统 Settings 查询确认服务确实在运行。
-         * 防止 instance 因进程异常残留为非 null 但服务实际已断开的情况。
+         * Hardened validation: do not rely on the static instance alone, also confirm through
+         * system Settings that the service is actually running. This avoids false positives
+         * when instance remains non-null after an abnormal process state.
          */
         fun isServiceEnabled(context: Context): Boolean {
-            // 快速路径：instance 为 null 则一定未启用
+            // Fast path: a null instance always means the service is disabled.
             if (instance == null) return false
 
-            // 双重校验：通过系统 Settings 确认服务确实在已启用列表中
+            // Double-check through system Settings that the service is listed as enabled.
             return try {
                 val enabledServices = Settings.Secure.getString(
                     context.contentResolver,
@@ -69,13 +70,13 @@ class AgentAccessibilityService : AccessibilityService() {
                     .flattenToString()
                 enabledServices.split(':').any { it.equals(expectedComponent, ignoreCase = true) }
             } catch (_: Throwable) {
-                // Settings 查询失败时回退到 instance 检查
+                // Fall back to the instance check if the Settings lookup fails.
                 instance != null
             }
         }
 
         /**
-         * 引导用户前往无障碍设置页面。
+         * Send the user to the accessibility settings screen.
          */
         fun openAccessibilitySettings(context: Context) {
             val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
@@ -103,7 +104,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        // 服务被中断。
+        // The service was interrupted.
     }
 
     override fun onDestroy() {
@@ -112,11 +113,11 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     // ================================================================
-    // 感知能力
+    // Perception capabilities
     // ================================================================
 
     /**
-     * 获取当前屏幕的 UI 树根节点。
+     * Get the root node of the current screen UI tree.
      */
     fun getRootNode(): AccessibilityNodeInfo? {
         return rootInActiveWindow
@@ -127,14 +128,14 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 获取解析后的 UI 节点列表。
+     * Get the parsed list of UI nodes.
      */
     fun getUiNodes(): List<UiNode> {
         return UiTreeParser.parse(rootInActiveWindow)
     }
 
     /**
-     * 获取屏幕尺寸（像素）。
+     * Get the screen size in pixels.
      */
     fun getScreenSize(): Pair<Int, Int> {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -150,26 +151,27 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     // ================================================================
-    // 操作能力
+    // Action capabilities
     // ================================================================
 
-    // ========== P1 新增：Spatial Grounding 原生坐标执行 ==========
+    // ========== P1 addition: native Spatial Grounding coordinate execution ==========
     /**
-     * 通过 Gemini Spatial Grounding 归一化坐标执行点击（坐标范围 0.0-1.0）。
+     * Execute a tap from Gemini Spatial Grounding normalized coordinates in the [0.0, 1.0] range.
      *
-     * 这是 P1 视觉基座革命的核心执行路径，彻底解决游戏、小程序、Flutter 等
-     * 跨端 UI 的"致盲"问题。当 Gemini 返回纯视觉定位坐标时，此方法为首选。
+     * This is the core execution path of the P1 visual foundation work. It removes the
+     * "blind spot" issue for cross-platform UIs such as games, mini-programs, and Flutter.
+     * When Gemini returns pure visual coordinates, this method is the preferred path.
      *
-     * @param normalizedX 归一化 X 坐标，范围 [0.0, 1.0]，0.0 = 左边缘，1.0 = 右边缘
-     * @param normalizedY 归一化 Y 坐标，范围 [0.0, 1.0]，0.0 = 上边缘，1.0 = 下边缘
-     * @param callback 执行结果回调
+     * @param normalizedX Normalized X coordinate in [0.0, 1.0], where 0.0 is the left edge and 1.0 is the right edge.
+     * @param normalizedY Normalized Y coordinate in [0.0, 1.0], where 0.0 is the top edge and 1.0 is the bottom edge.
+     * @param callback Result callback.
      */
     fun performSpatialClick(
         normalizedX: Float,
         normalizedY: Float,
         callback: ((Boolean) -> Unit)? = null,
     ) {
-        // 校验归一化坐标范围
+        // Validate the normalized coordinate range.
         if (normalizedX !in 0f..1f || normalizedY !in 0f..1f) {
             Log.w(TAG, "performSpatialClick rejected: coordinates out of range ($normalizedX, $normalizedY)")
             callback?.invoke(false)
@@ -185,10 +187,10 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 通过 Spatial Grounding 坐标数组执行点击。
+     * Execute a tap from a Spatial Grounding coordinate array.
      *
-     * @param spatialCoordinates [x, y] 归一化坐标数组，范围 [0.0, 1.0]
-     * @param callback 执行结果回调
+     * @param spatialCoordinates Normalized [x, y] coordinates in the [0.0, 1.0] range.
+     * @param callback Result callback.
      */
     fun performSpatialClickFromArray(
         spatialCoordinates: FloatArray,
@@ -203,12 +205,12 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 通过 Spatial Grounding 坐标执行长按手势。
+     * Execute a long press from Spatial Grounding coordinates.
      *
-     * @param normalizedX 归一化 X 坐标，范围 [0.0, 1.0]
-     * @param normalizedY 归一化 Y 坐标，范围 [0.0, 1.0]
-     * @param durationMs 长按持续时间（毫秒），默认 800ms
-     * @param callback 执行结果回调
+     * @param normalizedX Normalized X coordinate in [0.0, 1.0].
+     * @param normalizedY Normalized Y coordinate in [0.0, 1.0].
+     * @param durationMs Long-press duration in milliseconds, default 800 ms.
+     * @param callback Result callback.
      */
     fun performSpatialLongPress(
         normalizedX: Float,
@@ -254,14 +256,14 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 通过 Spatial Grounding 坐标执行拖拽手势。
+     * Execute a drag gesture from Spatial Grounding coordinates.
      *
-     * @param fromX 起点归一化 X 坐标
-     * @param fromY 起点归一化 Y 坐标
-     * @param toX 终点归一化 X 坐标
-     * @param toY 终点归一化 Y 坐标
-     * @param durationMs 拖拽持续时间（毫秒）
-     * @param callback 执行结果回调
+     * @param fromX Start normalized X coordinate.
+     * @param fromY Start normalized Y coordinate.
+     * @param toX End normalized X coordinate.
+     * @param toY End normalized Y coordinate.
+     * @param durationMs Drag duration in milliseconds.
+     * @param callback Result callback.
      */
     fun performSpatialDrag(
         fromX: Float,
@@ -309,7 +311,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 通过比例坐标在屏幕点击（坐标范围 0-1000）。
+     * Tap the screen using proportional coordinates in the 0-1000 range.
      * @param bbox [ymin, xmin, ymax, xmax]
      */
     fun performClickOnBbox(bbox: IntArray, callback: ((Boolean) -> Unit)? = null) {
@@ -327,7 +329,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 在精确像素坐标点击。
+     * Tap at an exact pixel coordinate.
      */
     fun performClickAt(x: Float, y: Float, callback: ((Boolean) -> Unit)? = null) {
         if (!x.isFinite() || !y.isFinite()) {
@@ -369,7 +371,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 通过 UI 树查找并点击包含指定文本的节点。
+     * Find and click a node containing the specified text from the UI tree.
      */
     fun performClickByText(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -379,7 +381,7 @@ class AgentAccessibilityService : AccessibilityService() {
                 val result = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 if (result) return true
             }
-            // 若节点自身不可点，尝试点击其父节点。
+            // If the node itself is not clickable, try its parent instead.
             var parent = node.parent
             var depth = 0
             while (parent != null && depth < 5) {
@@ -395,7 +397,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 执行滑动手势。
+     * Execute a swipe gesture.
      */
     fun performSwipe(
         direction: String,
@@ -436,7 +438,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 在当前焦点输入框中输入文本。
+     * Input text into the currently focused text field.
      */
     fun performInput(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -455,7 +457,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 提交当前输入（先尝试 IME 回车，再尝试点击“搜索/前往/Go”等按钮）。
+     * Submit the current input by trying IME enter first, then search/go style buttons.
      */
     fun performSubmitInput(): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -483,14 +485,14 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 执行返回。
+     * Perform a back action.
      */
     fun performBack(): Boolean {
         return performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
     /**
-     * 回到桌面。
+     * Return to the home screen.
      */
     fun performHome(): Boolean {
         return performGlobalAction(GLOBAL_ACTION_HOME)
@@ -567,4 +569,3 @@ class AgentAccessibilityService : AccessibilityService() {
         val bottom: Float,
     )
 }
-

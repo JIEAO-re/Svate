@@ -88,7 +88,7 @@ data class ActionSelector(
     val boundsHint: IntArray? = null,
     val nodeSignature: String = "",
 ) {
-    /** 检查是否有任何有效的选择器字段 */
+    /** Check whether any valid selector field is present. */
     fun hasAnyField(): Boolean {
         return packageName.isNotBlank() ||
             resourceId.isNotBlank() ||
@@ -162,9 +162,9 @@ data class AgentAction(
     val targetDesc: String,
     val targetBbox: IntArray?,
     val targetSomId: Int? = null,
-    // ========== P1 新增：Spatial Grounding 原生坐标 ==========
-    // 当 Gemini 返回纯视觉定位坐标时，此字段为首选执行路径。
-    // 优先级：spatialCoordinates > targetSomId > selector > targetBbox
+    // ========== P1 addition: native Spatial Grounding coordinates ==========
+    // When Gemini returns pure visual coordinates, this field becomes the preferred execution path.
+    // Priority: spatialCoordinates > targetSomId > selector > targetBbox
     val spatialCoordinates: FloatArray? = null,
     val inputText: String? = null,
     val packageName: String? = null,
@@ -182,8 +182,8 @@ data class AgentAction(
     val knowledgeCapture: KnowledgeCapture? = null,
 ) {
     /**
-     * 获取首选的定位方式。
-     * 优先级：SPATIAL_COORDINATES > SOM_ID > SELECTOR > LEGACY_BBOX
+     * Get the preferred targeting strategy.
+     * Priority: SPATIAL_COORDINATES > SOM_ID > SELECTOR > LEGACY_BBOX
      */
     fun getPreferredTargetingMethod(): TargetingMethod? {
         return ActionResolver.detectTargetingMethod(
@@ -194,7 +194,7 @@ data class AgentAction(
         )
     }
 
-    /** 是否使用 Spatial Grounding 纯视觉定位 */
+    /** Whether the action uses pure visual Spatial Grounding targeting. */
     fun usesSpatialGrounding(): Boolean {
         return spatialCoordinates != null && spatialCoordinates.size == 2
     }

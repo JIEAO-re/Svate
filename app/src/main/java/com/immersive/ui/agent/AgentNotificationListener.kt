@@ -22,24 +22,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * P2 事件驱动激活：通知监听服务
+ * P2 event-driven activation: notification listener service.
  *
- * 架构设计：
- * - 监听系统通知，识别可触发 Agent 的事件
- * - 支持白名单应用的通知触发
- * - 支持关键词匹配触发
- * - 发射 NotificationEvent 供 Orchestrator 消费
+ * Architecture:
+ * - Listen to system notifications and identify events that can trigger the agent
+ * - Support triggers from allowlisted apps
+ * - Support keyword-based triggers
+ * - Emit NotificationEvent instances for the orchestrator to consume
  *
- * 触发场景：
- * 1. 外卖到达通知 -> 自动打开外卖 App 查看取餐码
- * 2. 快递签收通知 -> 自动打开快递 App 查看详情
- * 3. 日程提醒通知 -> 自动打开日历 App
- * 4. 消息通知 -> 自动打开聊天 App 回复
+ * Example trigger scenarios:
+ * 1. Delivery-arrived notification -> open the delivery app to check the pickup code
+ * 2. Package-delivered notification -> open the courier app to inspect details
+ * 3. Calendar reminder notification -> open the calendar app
+ * 4. Message notification -> open the chat app and reply
  *
- * 安全考量：
- * - 仅监听白名单应用的通知
- * - 敏感应用（银行、支付）默认排除
- * - 用户可随时关闭自动触发
+ * Safety considerations:
+ * - Only listen to notifications from allowlisted apps
+ * - Sensitive apps such as banking and payment apps are excluded by default
+ * - Users can disable auto-triggering at any time
  */
 class AgentNotificationListener : NotificationListenerService() {
 
@@ -50,7 +50,7 @@ class AgentNotificationListener : NotificationListenerService() {
         var instance: AgentNotificationListener? = null
             private set
 
-        // ========== 事件流（静态，供外部订阅） ==========
+        // ========== Event stream (static, externally subscribable) ==========
         private val _notificationEvents = MutableSharedFlow<NotificationEvent>(
             replay = 0,
             extraBufferCapacity = 16,
@@ -61,7 +61,7 @@ class AgentNotificationListener : NotificationListenerService() {
         private val _serviceState = MutableStateFlow(ListenerState.DISCONNECTED)
         val serviceState: StateFlow<ListenerState> = _serviceState.asStateFlow()
 
-        // ========== 配置 ==========
+        // ========== Configuration ==========
         private var config = NotificationListenerConfig()
 
         fun updateConfig(newConfig: NotificationListenerConfig) {
@@ -69,7 +69,7 @@ class AgentNotificationListener : NotificationListenerService() {
         }
 
         /**
-         * 检查通知监听权限是否已授予
+         * Check whether notification listener access has been granted.
          */
         fun isPermissionGranted(context: Context): Boolean {
             val componentName = ComponentName(context, AgentNotificationListener::class.java)
@@ -81,7 +81,7 @@ class AgentNotificationListener : NotificationListenerService() {
         }
 
         /**
-         * 打开通知监听权限设置页
+         * Open the notification listener permission settings page.
          */
         fun openPermissionSettings(context: Context) {
             val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
@@ -133,20 +133,20 @@ class AgentNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-        // 可选：追踪通知移除事件
+        // Optional: track notification removal events.
     }
 
     private suspend fun processNotification(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
         val notification = sbn.notification ?: return
 
-        // 1. 检查是否在黑名单中
+        // 1. Check whether the app is on the denylist.
         if (config.blacklistPackages.contains(packageName)) {
             Log.v(TAG, "Notification from blacklisted package: $packageName")
             return
         }
 
-        // 2. 提取通知内容
+        // 2. Extract notification content.
         val extras = notification.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
@@ -155,14 +155,14 @@ class AgentNotificationListener : NotificationListenerService() {
 
         val combinedText = "$title $text $bigText $subText"
 
-        // 3. 检查是否匹配触发条件
+        // 3. Check whether any trigger condition matches.
         val triggerMatch = findTriggerMatch(packageName, combinedText)
         if (triggerMatch == null && !config.whitelistPackages.contains(packageName)) {
             Log.v(TAG, "Notification doesn't match any trigger: $packageName")
             return
         }
 
-        // 4. 构建事件
+        // 4. Build the event payload.
         @Suppress("DEPRECATION")
         val notificationPriority = notification.priority
         val event = NotificationEvent(
@@ -187,10 +187,10 @@ class AgentNotificationListener : NotificationListenerService() {
     private fun findTriggerMatch(packageName: String, text: String): TriggerMatch? {
         val lowerText = text.lowercase()
 
-        // 检查关键词触发器
+        // Check keyword triggers.
         for (trigger in config.keywordTriggers) {
             if (trigger.keywords.any { lowerText.contains(it.lowercase()) }) {
-                // 检查包名过滤（如果指定）
+                // Check package-name filtering when configured.
                 if (trigger.packageFilter.isEmpty() || trigger.packageFilter.contains(packageName)) {
                     return TriggerMatch(
                         type = TriggerType.KEYWORD_MATCH,
@@ -201,7 +201,7 @@ class AgentNotificationListener : NotificationListenerService() {
             }
         }
 
-        // 检查应用特定触发器
+        // Check app-specific triggers.
         val appTrigger = config.appTriggers[packageName]
         if (appTrigger != null) {
             return TriggerMatch(
@@ -215,26 +215,26 @@ class AgentNotificationListener : NotificationListenerService() {
     }
 }
 
-// ========== 数据类 ==========
+// ========== Data classes ==========
 
 data class NotificationListenerConfig(
     val enabled: Boolean = true,
 
-    // 白名单应用：这些应用的所有通知都会触发事件
+    // Allowlisted apps: every notification from these apps triggers an event.
     val whitelistPackages: Set<String> = emptySet(),
 
-    // 黑名单应用：这些应用的通知永远不会触发事件
+    // Denylisted apps: notifications from these apps never trigger events.
     val blacklistPackages: Set<String> = setOf(
-        // 银行类
+        // Banking apps
         "com.icbc", "com.ccb.ccbapp", "com.chinamworld.bocmbci",
         "com.cmb.pb", "com.cmbchina.ccd.pluto.cmbActivity",
-        // 支付类
+        // Payment apps
         "com.eg.android.AlipayGphone", "com.tencent.mm",
-        // 证券类
+        // Brokerage apps
         "com.hexin.plat.android", "com.eastmoney.android.berlin",
     ),
 
-    // 关键词触发器
+    // Keyword-based triggers
     val keywordTriggers: List<KeywordTrigger> = listOf(
         KeywordTrigger(
             keywords = listOf("已送达", "已签收", "取餐码", "取件码"),
@@ -250,7 +250,7 @@ data class NotificationListenerConfig(
         ),
     ),
 
-    // 应用特定触发器
+    // App-specific triggers
     val appTriggers: Map<String, AppTrigger> = mapOf(
         "com.taobao.taobao" to AppTrigger(suggestedGoal = "查看淘宝订单"),
         "com.jingdong.app.mall" to AppTrigger(suggestedGoal = "查看京东订单"),

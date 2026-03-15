@@ -13,7 +13,7 @@ const MAX_RETRIES = Number(process.env.LIVE_TURN_MAX_RETRIES || 3);
 const RETRY_BASE_DELAY_MS = Number(process.env.LIVE_TURN_RETRY_BASE_DELAY_MS || 500);
 
 // ============================================================================
-// 帧指纹去重：避免连续相同帧浪费 token
+// Deduplicate by frame fingerprint so repeated frames do not waste tokens
 // ============================================================================
 const lastFrameFingerprintBySession = new Map<string, string>();
 
@@ -27,16 +27,16 @@ function cleanJsonText(raw: string): string {
 }
 
 // ============================================================================
-// 帧窗口解析：GCS URI 直通模型，不再下载到内存
+// Resolve the frame window directly from GCS URIs without downloading into memory
 // ============================================================================
 
 interface ResolvedFrame {
   frameId: string;
   tsMs: number;
   uiSignature: string;
-  /** 仅当 inline 模式时存在 */
+  /** Present only in inline mode. */
   imageBase64?: string;
-  /** 仅当 GCS 引用模式时存在 */
+  /** Present only in GCS reference mode. */
   gcsUri?: string;
   sourceType: "inline" | "gcs";
 }
@@ -99,13 +99,13 @@ function getFrameWindow(request: NextStepRequest): ResolvedFrame[] {
 }
 
 // ============================================================================
-// 构建模型内容部件：GCS URI → fileData, inline → inlineData
+// Build model content parts: GCS URI -> fileData, inline -> inlineData
 // ============================================================================
 
 function buildFrameParts(frameWindow: ResolvedFrame[]): Part[] {
   return frameWindow.map((frame): Part => {
     if (frame.gcsUri) {
-      // 直接将 GCS URI 喂给模型，不下载、不转码
+      // Feed the GCS URI directly to the model without downloading or transcoding
       return {
         fileData: {
           fileUri: frame.gcsUri,
@@ -123,7 +123,7 @@ function buildFrameParts(frameWindow: ResolvedFrame[]): Part[] {
 }
 
 // ============================================================================
-// 核心函数：无状态 generateContent 调用（取代 Live WebSocket 反模式）
+// Core function: stateless generateContent call that replaces the Live WebSocket anti-pattern
 // ============================================================================
 
 export async function runLivePlannerTurn(
@@ -138,7 +138,7 @@ export async function runLivePlannerTurn(
 }> {
   const frameWindow = getFrameWindow(request);
 
-  // 帧去重：fingerprint 命中时直接返回 WAIT，免去模型调用
+  // Skip the model call when fingerprint deduplication hits and return WAIT immediately
   if (frameWindow.length === 0) {
     return {
       model: PLANNER_MODEL,
@@ -174,7 +174,7 @@ export async function runLivePlannerTurn(
     "gemini-2.5-flash",
   ]);
 
-  // 构建 contents：先放图片帧部件，最后放文本 prompt
+  // Build contents by appending frame parts first and the text prompt last
   const frameParts = buildFrameParts(frameWindow);
   const contents: Part[] = [...frameParts, { text: prompt }];
 
@@ -216,7 +216,7 @@ export async function runLivePlannerTurn(
   }
 
   // ============================================================================
-  // 安全兜底：所有重试耗尽后返回 WAIT 动作，避免上层崩溃
+  // Safety fallback: return WAIT after retries are exhausted so the upper layer does not crash
   // ============================================================================
   console.warn(
     `[live-turn-client] all ${MAX_RETRIES} attempts failed, returning safe WAIT fallback. Last error: ${String((lastError as Error)?.message || lastError)}`,

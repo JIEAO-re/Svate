@@ -6,27 +6,27 @@ import android.net.Uri
 import android.util.Log
 
 /**
- * Intent 直达解析器 —— Action Pyramid Tier 1。
+ * Direct Intent resolver: Action Pyramid Tier 1.
  *
- * 当 AI 决定打开 App 执行搜索任务时，尝试直接构建 DeepLink/Intent，
- * 绕过 GUI 模拟操作，实现毫秒级完成。
+ * When the AI decides to open an app for a search task, try to build a direct
+ * deep link or Intent and skip GUI simulation for millisecond-level completion.
  *
- * 优先级：
- * 1. DeepLink URL（如 youtube://search?q=xxx）
+ * Priority:
+ * 1. Deep-link URL (for example, youtube://search?q=xxx)
  * 2. ACTION_SEARCH Intent
  * 3. ACTION_VIEW + URL scheme
- * 4. 降级为 getLaunchIntentForPackage()（普通启动）
+ * 4. Fall back to getLaunchIntentForPackage() for a regular launch
  */
 object IntentResolver {
 
     private const val TAG = "IntentResolver"
 
     /**
-     * 主流 App 的搜索 DeepLink 字典。
-     * key = 包名, value = { query -> DeepLink URI 字符串 }
+     * Search deep-link dictionary for mainstream apps.
+     * key = package name, value = { query -> deep-link URI string }
      */
     private val DEEPLINK_REGISTRY: Map<String, (String) -> String> = mapOf(
-        // 微信（依赖官方导航协议，不支持时会自动退化）
+        // WeChat (depends on the official navigation protocol and degrades automatically when unsupported)
         "com.tencent.mm" to { q ->
             "weixin://dl/search?query=${Uri.encode(q)}"
         },
@@ -34,31 +34,31 @@ object IntentResolver {
         "com.google.android.youtube" to { q ->
             "https://www.youtube.com/results?search_query=${Uri.encode(q)}"
         },
-        // 抖音
+        // Douyin
         "com.ss.android.ugc.aweme" to { q ->
             "snssdk1128://search/trending?keyword=${Uri.encode(q)}"
         },
-        // 百度
+        // Baidu
         "com.baidu.searchbox" to { q ->
             "https://m.baidu.com/s?word=${Uri.encode(q)}"
         },
-        // 微博
+        // Weibo
         "com.sina.weibo" to { q ->
             "sinaweibo://searchall?q=${Uri.encode(q)}"
         },
-        // 知乎
+        // Zhihu
         "com.zhihu.android" to { q ->
             "zhihu://search?q=${Uri.encode(q)}"
         },
-        // 哔哩哔哩
+        // Bilibili
         "tv.danmaku.bili" to { q ->
             "bilibili://search?keyword=${Uri.encode(q)}"
         },
-        // 小红书
+        // Xiaohongshu
         "com.xingin.xhs" to { q ->
             "xhsdiscover://search/result?keyword=${Uri.encode(q)}"
         },
-        // 淘宝
+        // Taobao
         "com.taobao.taobao" to { q ->
             "taobao://s.taobao.com/?q=${Uri.encode(q)}"
         },
@@ -73,9 +73,9 @@ object IntentResolver {
     )
 
     /**
-     * 尝试为指定的 App + 搜索关键词构建直达 Intent。
+     * Try to build a direct Intent for the given app and search query.
      *
-     * @return 可发送的 Intent，或 null（表示无法直达，需走 GUI 模拟）
+     * @return A sendable Intent, or null when direct launch is not possible and GUI simulation is required.
      */
     fun tryResolveSearchIntent(
         packageName: String?,
@@ -84,7 +84,7 @@ object IntentResolver {
     ): Intent? {
         if (packageName.isNullOrBlank() || searchQuery.isNullOrBlank()) return null
 
-        // 1. 尝试 DeepLink 字典
+        // 1. Try the deep-link dictionary.
         val deepLinkBuilder = DEEPLINK_REGISTRY[packageName]
         if (deepLinkBuilder != null) {
             val uri = deepLinkBuilder(searchQuery)
@@ -92,12 +92,12 @@ object IntentResolver {
                 setPackage(packageName)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            // 验证 Intent 是否可被解析
+            // Verify that the Intent can be resolved.
             if (intent.resolveActivity(context.packageManager) != null) {
                 Log.d(TAG, "DeepLink resolved: $uri")
                 return intent
             }
-            // DeepLink 可能不支持，尝试不指定包名（让系统选择浏览器）
+            // The deep link may be unsupported; retry without a package so the system can pick a browser.
             if (uri.startsWith("http")) {
                 val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -109,7 +109,7 @@ object IntentResolver {
             }
         }
 
-        // 2. 尝试 ACTION_SEARCH
+        // 2. Try ACTION_SEARCH.
         val searchIntent = Intent(Intent.ACTION_SEARCH).apply {
             setPackage(packageName)
             putExtra("query", searchQuery)
@@ -121,7 +121,7 @@ object IntentResolver {
             return searchIntent
         }
 
-        // 3. 尝试 ACTION_WEB_SEARCH
+        // 3. Try ACTION_WEB_SEARCH.
         val webSearchIntent = Intent(Intent.ACTION_WEB_SEARCH).apply {
             setPackage(packageName)
             putExtra("query", searchQuery)
@@ -138,7 +138,7 @@ object IntentResolver {
     }
 
     /**
-     * 检查某个包名是否在 DeepLink 字典中注册。
+     * Check whether a package name is registered in the deep-link dictionary.
      */
     fun hasDeepLink(packageName: String?): Boolean {
         return packageName != null && DEEPLINK_REGISTRY.containsKey(packageName)

@@ -1,12 +1,12 @@
 /**
- * 回归测试
+ * Regression tests.
  *
- * 覆盖场景：
- *   1. /analyze-screen 无 demo header 时返回重定向提示 (301)
- *   2. /next-step 正常处理（schema 校验通过）
- *   3. 鉴权失败路径：无 token 时返回 401
- *   4. 高风险动作必须被阻断（arbiter 层 HIGH risk → WAIT）
- *   5. 危险 intent (delete/uninstall) 被 arbiter 拦截
+ * Covered scenarios:
+ *   1. /analyze-screen returns a redirect hint (301) when no demo header is present
+ *   2. /next-step works normally when schema validation passes
+ *   3. Authentication failure path returns 401 when no token is provided
+ *   4. High-risk actions must be blocked (arbiter HIGH risk -> WAIT)
+ *   5. Dangerous intents such as delete or uninstall are intercepted by the arbiter
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -19,7 +19,7 @@ import { arbitrateDecision } from "@/lib/mobile-agent/arbiter";
 import type { ReviewerOutput } from "@/lib/schemas/mobile-agent";
 
 // ---------------------------------------------------------------------------
-// 辅助工厂
+// Helper factory
 // ---------------------------------------------------------------------------
 function makeObservation(overrides: Record<string, unknown> = {}) {
   return {
@@ -112,7 +112,7 @@ function approveReview(index = 0): ReviewerOutput {
 
 
 // ===================================================================
-// 2. 路由切换：/next-step 正常处理
+// 2. Route switch: /next-step should work normally
 // ===========================================================================
 describe("next-step normal processing", () => {
   it("valid request passes schema validation and arbiter produces a final action", () => {
@@ -143,12 +143,12 @@ describe("next-step normal processing", () => {
 });
 
 // ===========================================================================
-// 3. 鉴权失败路径：无 token 时返回 401
+// 3. Authentication failure path: missing token should return 401
 // ===========================================================================
 describe("authentication failure path", () => {
   it("missing auth credentials results in authentication_failed response", () => {
-    // 验证 next-step/route.ts 中 authenticateRequest 的逻辑：
-    // 无 X-Firebase-AppCheck 且无 Authorization header → missing_auth_credentials
+    // Verify the authenticateRequest logic used in next-step/route.ts:
+    // missing X-Firebase-AppCheck and missing Authorization header -> missing_auth_credentials
     const hasAppCheckToken = false;
     const hasAuthHeader = false;
     const skipAuthDev = false;
@@ -165,7 +165,7 @@ describe("authentication failure path", () => {
   });
 
   it("invalid JWT format is rejected", () => {
-    // JWT 必须以 "ey" 开头（base64 编码的 JSON header）
+    // JWT must start with "ey" because the JSON header is base64-encoded
     const token = "not_a_valid_jwt";
     const isValidFormat = token.startsWith("ey");
     expect(isValidFormat).toBe(false);
@@ -179,7 +179,7 @@ describe("authentication failure path", () => {
 });
 
 // ===========================================================================
-// 4. 高风险动作必须被阻断
+// 4. High-risk actions must be blocked
 // ===========================================================================
 describe("high risk action blocking", () => {
   it("HIGH risk action is blocked by arbiter even when reviewer approves", () => {
@@ -226,7 +226,7 @@ describe("high risk action blocking", () => {
 });
 
 // =========================================================================
-// 5. 危险 intent 被拦截（delete/uninstall 等不在白名单中）
+// 5. Dangerous intents are intercepted when they are outside the allowlist
 // ===========================================================================
 describe("dangerous intent blocking", () => {
   it("OPEN_INTENT with non-whitelisted action (DELETE) is blocked", () => {

@@ -7,7 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 对话中的单条消息
+ * A single message in a conversation.
  */
 data class ChatMsg(
     val role: String,
@@ -16,7 +16,7 @@ data class ChatMsg(
 )
 
 /**
- * 一次完整对话
+ * A complete conversation.
  */
 data class ChatSession(
     val id: String,
@@ -28,7 +28,7 @@ data class ChatSession(
 )
 
 /**
- * 对话持久化 + Gemini 标题/总结生成
+ * Conversation persistence plus Gemini-generated titles and summaries.
  */
 object ChatStorage {
 
@@ -40,7 +40,7 @@ object ChatStorage {
         ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     // ================================================================
-    // 读写
+    // Read/write helpers
     // ================================================================
 
     fun loadSessions(ctx: Context): MutableList<ChatSession> {
@@ -80,7 +80,7 @@ object ChatStorage {
         val trimmed = sessions.take(MAX_SESSIONS)
         for (s in trimmed) {
             val msgsArr = JSONArray()
-            // 只存最近 200 条消息以控制大小
+            // Keep only the most recent 200 messages to control storage size.
             for (m in s.messages.takeLast(200)) {
                 msgsArr.put(JSONObject().apply {
                     put("role", m.role)
@@ -101,7 +101,7 @@ object ChatStorage {
     }
 
     // ================================================================
-    // Gemini 标题生成（≤15 token）
+    // Gemini title generation (<= 15 tokens)
     // ================================================================
 
     fun generateTitle(messages: List<ChatMsg>): String {
@@ -132,7 +132,7 @@ $recent
     }
 
     // ================================================================
-    // Gemini 对话总结
+    // Gemini conversation summary
     // ================================================================
 
     fun generateSummary(messages: List<ChatMsg>): String {

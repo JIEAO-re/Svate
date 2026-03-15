@@ -31,16 +31,16 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * P1 响应式重构：视觉感知器流水线
+ * P1 reactive refactor: visual perception pipeline.
  *
- * 职责：
- * - 高频抽帧（响应式 debounce 替代死板 wait）
- * - 计算帧指纹（去重）
- * - 本地弹窗快反射拦截（PopupRecovery.fastDetectLocal）
- * - SoM 标注渲染
- * - UI 树剪枝
+ * Responsibilities:
+ * - Sample frames at high frequency using reactive debounce instead of rigid waits
+ * - Compute frame fingerprints for deduplication
+ * - React quickly to local popups through PopupRecovery.fastDetectLocal
+ * - Render SoM overlays
+ * - Prune the UI tree
  *
- * 输出：PerceptionSnapshot 流，供 LiveDecisionClient 消费
+ * Output: a PerceptionSnapshot stream consumed by LiveDecisionClient.
  */
 @OptIn(FlowPreview::class)
 class VisualPerceptionFlow(
@@ -51,7 +51,7 @@ class VisualPerceptionFlow(
         private const val TAG = "VisualPerceptionFlow"
     }
 
-    // ========== 输出流 ==========
+    // ========== Output stream ==========
     private val _snapshots = MutableSharedFlow<PerceptionSnapshot>(
         replay = 1,
         extraBufferCapacity = 8,
@@ -69,7 +69,7 @@ class VisualPerceptionFlow(
     private val _state = MutableStateFlow(PerceptionState.IDLE)
     val state: StateFlow<PerceptionState> = _state.asStateFlow()
 
-    // ========== 内部状态 ==========
+    // ========== Internal state ==========
     private var perceptionJob: Job? = null
     private var lastFingerprint: String? = null
     private var lastSomMarkerMap: Map<Int, UiNode> = emptyMap()
@@ -81,12 +81,12 @@ class VisualPerceptionFlow(
         lastSomMarkerMap = emptyMap()
 
         perceptionJob = scope.launch(Dispatchers.IO) {
-            // 订阅 UI 变化事件流，用 debounce 替代死板等待
+            // Subscribe to UI-change events and use debounce instead of rigid waits.
             val uiEventFlow = AgentAccessibilityService.uiChangeEvents
                 .debounce(config.debounceMs)
                 .map { it.packageName to it.eventTime }
 
-            // 主感知循环
+            // Main perception loop.
             launch {
                 uiEventFlow.collect { (pkg, _) ->
                     if (!isActive) return@collect
@@ -98,7 +98,7 @@ class VisualPerceptionFlow(
                 }
             }
 
-            // 兜底轮询（防止 UI 事件丢失）
+            // Fallback polling in case UI events are missed.
             launch {
                 while (isActive) {
                     delay(config.fallbackPollMs)
@@ -127,15 +127,15 @@ class VisualPerceptionFlow(
         val service = AgentAccessibilityService.instance ?: return
         val captureService = AgentCaptureService.instance ?: return
 
-        // 1. 获取 UI 树
+        // 1. Fetch the UI tree.
         val rawNodes = service.getUiNodes()
         if (rawNodes.isEmpty()) return
 
-        // 2. 本地弹窗快反射拦截
+        // 2. Quick local popup interception.
         val popup = PopupRecovery.detect(rawNodes)
         if (popup != null) {
             _popupDetected.tryEmit(PopupEvent(popup, rawNodes))
-            // 尝试自动关闭弹窗
+            // Try to close the popup automatically.
             if (PopupRecovery.dismiss(popup, rawNodes, service)) {
                 Log.d(TAG, "Popup auto-dismissed: ${popup.type}")
                 delay(300)
@@ -143,7 +143,7 @@ class VisualPerceptionFlow(
             }
         }
 
-        // 3. UI 树剪枝
+        // 3. Prune the UI tree.
         val pruneResult = if (config.enablePruning) {
             UiNodePruner.prune(rawNodes)
         } else {
@@ -151,13 +151,13 @@ class VisualPerceptionFlow(
         }
         val prunedNodes = pruneResult.nodes
 
-        // 4. 计算 UI 签名
+        // 4. Compute the UI signature.
         val uiSignature = computeUiSignature(prunedNodes)
 
-        // 5. 截图
+        // 5. Capture the screen.
         val frame = captureService.captureFrame(uiSignature) ?: return
 
-        // 6. 计算帧指纹（去重）
+        // 6. Compute the frame fingerprint for deduplication.
         val fingerprint = FrameFingerprint.build(
             foregroundPackage = foregroundPackage,
             uiNodes = prunedNodes,
@@ -168,7 +168,7 @@ class VisualPerceptionFlow(
         }
         lastFingerprint = fingerprint
 
-        // 7. SoM 标注渲染
+        // 7. Render SoM overlays.
         val (screenWidth, screenHeight) = service.getScreenSize()
         val somResult = if (config.enableSom) {
             val interactiveNodes = SomRenderer.filterInteractiveNodes(prunedNodes)
@@ -183,7 +183,7 @@ class VisualPerceptionFlow(
         }
         lastSomMarkerMap = somResult?.markerMap ?: emptyMap()
 
-        // 8. 构建 SoM Markers Payload
+        // 8. Build the SoM markers payload.
         val somMarkers = somResult?.markerMap?.entries?.map { (id, node) ->
             SomMarkerPayload(
                 id = id,
@@ -204,7 +204,7 @@ class VisualPerceptionFlow(
             )
         }.orEmpty()
 
-        // 9. 发射感知快照
+        // 9. Emit the perception snapshot.
         val snapshot = PerceptionSnapshot(
             frame = frame,
             foregroundPackage = foregroundPackage,
@@ -233,7 +233,7 @@ class VisualPerceptionFlow(
     }
 }
 
-// ========== 数据类 ==========
+// ========== Data classes ==========
 
 data class PerceptionConfig(
     val debounceMs: Long = 500L,

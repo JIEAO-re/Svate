@@ -1,6 +1,6 @@
 /**
- * 纯前端极速图片压缩引擎（降延迟核心）
- * 将长辈动辄 5MB+ 的原图压缩至 100KB 左右，确保大模型 API 响应在 2-3 秒内。
+ * Fast client-side image compression engine focused on reducing latency.
+ * Compresses 5 MB+ source images down to roughly 100 KB so the model API can respond within 2-3 seconds.
  */
 export async function compressImageToBase64(file: File, maxDimension: number = 800): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -14,7 +14,7 @@ export async function compressImageToBase64(file: File, maxDimension: number = 8
       img.onload = () => {
         let { width, height } = img;
 
-        // 等比缩放算法
+        // Keep aspect ratio while resizing
         if (width > height) {
           if (width > maxDimension) {
             height = Math.round((height * maxDimension) / width);
@@ -37,12 +37,12 @@ export async function compressImageToBase64(file: File, maxDimension: number = 8
           return;
         }
 
-        // 铺设纯白背景（防止透明 PNG 压缩后变黑）
+        // Paint a white background first so transparent PNGs do not turn black after compression
         ctx.fillStyle = "#FFFFFF";
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
 
-        // 强行输出 0.7 质量的 JPEG，过滤对 AI 无用的高频噪点
+        // Force JPEG output at 0.7 quality to strip high-frequency noise that does not help the model
         const compressedBase64 = canvas.toDataURL("image/jpeg", 0.7);
         resolve(compressedBase64);
       };

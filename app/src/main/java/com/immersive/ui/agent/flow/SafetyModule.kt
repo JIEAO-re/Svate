@@ -6,28 +6,28 @@ import com.immersive.ui.agent.TaskSpec
 import com.immersive.ui.agent.UiNode
 
 /**
- * 安全模块：安全检查与风险拦截
+ * Safety module: safety checks and risk interception.
  *
- * 从 OpenClawOrchestrator 拆分而来，负责：
- * - 动作洗稿（sanitize）
- * - 高风险关键词拦截
- * - 视觉注入防御
- * - Human-in-the-loop 确认触发
+ * Extracted from OpenClawOrchestrator, responsible for:
+ * - Action sanitization
+ * - High-risk keyword blocking
+ * - Visual injection defense
+ * - Triggering human-in-the-loop confirmation
  */
 class SafetyModule(
     private val securityGuard: EdgeSecurityGuard,
 ) {
     /**
-     * 绑定用户确认回调
+     * Bind the user confirmation callback.
      */
     fun bindConfirmCallback(callback: ((AgentAction, (Boolean) -> Unit) -> Unit)?) {
         securityGuard.onRequestConfirm = callback
     }
 
     /**
-     * 对动作进行安全洗稿
+     * Sanitize an action through the safety layer.
      *
-     * @return SanitizeResult 包含是否通过、洗稿后的动作、拦截原因
+     * @return SanitizeResult with pass state, sanitized action, and block reason.
      */
     suspend fun sanitize(
         action: AgentAction,

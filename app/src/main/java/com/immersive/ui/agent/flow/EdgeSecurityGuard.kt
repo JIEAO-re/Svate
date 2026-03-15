@@ -21,18 +21,18 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
- * P1 响应式重构：边缘安全守卫链
+ * P1 reactive refactor: edge safety guard chain.
  *
- * 职责：
- * - 洗稿（sanitize）高风险动作
- * - HOMEWORK 模式下拦截发布/支付操作
- * - 触发 SYSTEM_ALERT_WINDOW 让用户手动确认（Human-in-the-loop）
- * - 语义守卫：检测破坏性操作
- * - P2 新增：视觉 Prompt Injection 防御
+ * Responsibilities:
+ * - Sanitize high-risk actions
+ * - Block publish and payment actions in HOMEWORK mode
+ * - Trigger SYSTEM_ALERT_WINDOW for manual user confirmation (human in the loop)
+ * - Apply semantic guards for destructive operations
+ * - Add P2 visual prompt-injection defense
  *
- * 设计原则：
- * - 不再死板 WAIT，而是主动触发用户确认
- * - 所有拦截都有明确的 reason 和 recovery path
+ * Design principles:
+ * - Do not fall back to a rigid WAIT when user confirmation is better
+ * - Every block should carry a clear reason and recovery path
  */
 class EdgeSecurityGuard(
     private val context: Context,
@@ -41,7 +41,7 @@ class EdgeSecurityGuard(
     companion object {
         private const val TAG = "EdgeSecurityGuard"
 
-        // 硬拦截关键词
+        // Hard-block keywords
         private val HARD_BLOCKED_KEYWORDS = listOf(
             "delete", "remove", "uninstall", "format", "reset",
             "删除", "移除", "卸载", "格式化", "重置", "清空",
@@ -49,14 +49,14 @@ class EdgeSecurityGuard(
             "转账", "支付", "付款", "购买", "充值",
         )
 
-        // HOMEWORK 模式特殊拦截
+        // HOMEWORK-mode specific blocks
         private val HOMEWORK_BLOCKED_KEYWORDS = listOf(
             "submit", "publish", "post", "send", "share",
             "提交", "发布", "发送", "分享", "上传",
         )
     }
 
-    // ========== 输出流 ==========
+    // ========== Output stream ==========
     private val _confirmationRequests = MutableSharedFlow<ConfirmationRequest>(
         replay = 0,
         extraBufferCapacity = 4,
@@ -71,16 +71,16 @@ class EdgeSecurityGuard(
     )
     val securityEvents: SharedFlow<SecurityEvent> = _securityEvents.asSharedFlow()
 
-    // ========== P2 视觉注入守卫 ==========
+    // ========== P2 visual injection guard ==========
     private val injectionGuard = VisualInjectionGuard()
 
-    // ========== 用户确认回调 ==========
+    // ========== User confirmation callback ==========
     var onRequestConfirm: ((AgentAction, (Boolean) -> Unit) -> Unit)? = null
 
     /**
-     * 验证并洗稿动作
+     * Validate and sanitize an action.
      *
-     * @return SanitizeResult 包含是否通过、洗稿后的动作、拦截原因
+     * @return SanitizeResult with pass/fail state, sanitized action, and block reason.
      */
     suspend fun sanitize(
         action: AgentAction,
@@ -92,7 +92,7 @@ class EdgeSecurityGuard(
     ): SanitizeResult {
         val mergedText = "${action.targetDesc} ${action.reasoning} ${action.elderlyNarration}"
 
-        // ========== P2 新增：视觉注入扫描 ==========
+        // ========== P2 addition: visual injection scan ==========
         if (config.enableInjectionGuard) {
             val injectionResult = injectionGuard.scan(
                 uiNodes = uiNodes,
@@ -138,7 +138,7 @@ class EdgeSecurityGuard(
             }
         }
 
-        // 1. 高风险等级直接触发用户确认
+        // 1. High-risk actions trigger user confirmation immediately.
         if (action.riskLevel == RiskLevel.HIGH) {
             Log.w(TAG, "HIGH risk action detected: ${action.intent}")
             _securityEvents.tryEmit(SecurityEvent(
@@ -159,7 +159,7 @@ class EdgeSecurityGuard(
             }
         }
 
-        // 2. 硬拦截关键词检测
+        // 2. Hard-block keyword detection
         if (containsBlockedKeyword(mergedText, HARD_BLOCKED_KEYWORDS)) {
             Log.w(TAG, "Hard blocked keyword detected in: $mergedText")
             _securityEvents.tryEmit(SecurityEvent(
@@ -174,7 +174,7 @@ class EdgeSecurityGuard(
             )
         }
 
-        // 3. HOMEWORK 模式特殊拦截
+        // 3. HOMEWORK-mode specific blocking
         if (taskSpec.mode == TaskMode.HOMEWORK) {
             if (containsBlockedKeyword(mergedText, HOMEWORK_BLOCKED_KEYWORDS)) {
                 Log.w(TAG, "HOMEWORK mode: submit/publish blocked")
@@ -184,7 +184,7 @@ class EdgeSecurityGuard(
                     reason = "HOMEWORK mode blocks submit/publish actions",
                 ))
 
-                // 触发用户确认而非直接拦截
+                // Ask for user confirmation instead of blocking immediately.
                 val confirmed = requestUserConfirmation(
                     action,
                     "HOMEWORK mode detected a submit action. This may submit your homework. Proceed?",
@@ -201,7 +201,7 @@ class EdgeSecurityGuard(
             }
         }
 
-        // 4. Intent 类型特殊校验
+        // 4. Intent-specific validation
         when (action.intent) {
             ActionIntent.CLICK -> {
                 val bboxCheck = when {
@@ -243,7 +243,7 @@ class EdgeSecurityGuard(
             else -> { /* 其他 intent 类型暂不特殊处理 */ }
         }
 
-        // 5. WARNING 级别：记录但放行
+        // 5. WARNING level: record it but allow execution
         if (action.riskLevel == RiskLevel.WARNING) {
             _securityEvents.tryEmit(SecurityEvent(
                 type = SecurityEventType.WARNING_LOGGED,
@@ -256,7 +256,7 @@ class EdgeSecurityGuard(
     }
 
     /**
-     * 请求用户确认（Human-in-the-loop）
+     * Request user confirmation (human in the loop).
      */
     private suspend fun requestUserConfirmation(action: AgentAction, message: String): Boolean {
         _confirmationRequests.tryEmit(ConfirmationRequest(action, message))
@@ -269,7 +269,7 @@ class EdgeSecurityGuard(
                         if (cont.isActive) cont.resume(result)
                     }
                 } else {
-                    // 无回调时默认拒绝
+                    // Default to rejection when no callback is registered.
                     if (cont.isActive) cont.resume(false)
                 }
             }
@@ -305,7 +305,7 @@ class EdgeSecurityGuard(
     }
 }
 
-// ========== 数据类 ==========
+// ========== Data classes ==========
 
 data class SecurityGuardConfig(
     val confirmationTimeoutMs: Long = 60_000L,

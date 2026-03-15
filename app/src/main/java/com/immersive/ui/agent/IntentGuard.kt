@@ -27,15 +27,15 @@ object IntentGuard {
     )
 
     /**
-     * 硬拦截关键词列表：data URI 或 extras 中包含这些关键词时直接拒绝。
-     * 覆盖：删除、卸载、格式化、支付、转账等高危操作。
+     * Hard-block keyword list: reject immediately when the data URI or extras contain these terms.
+     * Covers high-risk actions such as delete, uninstall, format, payment, and transfer.
      */
     private val HARD_BLOCKED_KEYWORDS = listOf(
-        // 英文
+        // English
         "delete", "uninstall", "format", "factory_reset", "wipe",
         "payment", "transfer", "pay", "purchase", "checkout",
         "rm -rf", "drop table", "truncate",
-        // 中文
+        // Chinese
         "删除", "卸载", "格式化", "恢复出厂", "清空",
         "支付", "转账", "付款", "购买", "充值",
     )
@@ -66,7 +66,7 @@ object IntentGuard {
             }
         }
 
-        // 硬拦截关键词扫描：扫描 data URI 和 extras 中的高危关键词
+        // Hard-block scan: look for high-risk keywords in the data URI and extras.
         if (containsBlockedKeyword(dataUri)) {
             return SafetyCheckResult(false, "intent_data_uri_contains_blocked_keyword")
         }
@@ -77,7 +77,7 @@ object IntentGuard {
         var totalChars = 0
         for ((key, value) in spec.extras) {
             if (key.isBlank()) return SafetyCheckResult(false, "intent_extra_key_blank")
-            // 扫描 extras 的 key 和 value 中的高危关键词
+            // Scan high-risk keywords in both extras keys and values.
             if (containsBlockedKeyword(key)) {
                 return SafetyCheckResult(false, "intent_extra_key_contains_blocked_keyword")
             }

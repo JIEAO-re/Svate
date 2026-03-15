@@ -1,10 +1,10 @@
 /**
- * 端云契约测试
+ * Client-server contract tests.
  *
- * 验证 Android CloudDecisionClient.kt 发送的 payload 结构
- * 与服务端 Zod schema (NextStepRequestSchema / NextStepResponseSchema) 的一致性。
+ * Verify the payload structure sent by Android CloudDecisionClient.kt
+ * stays aligned with the server-side Zod schemas (NextStepRequestSchema / NextStepResponseSchema).
  *
- * 每个样例模拟 Android 端真实构造的 JSON，通过 Zod schema 校验确保契约不被破坏。
+ * Each case simulates real JSON from Android and uses Zod validation to prevent contract regressions.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/lib/schemas/mobile-agent";
 
 // ---------------------------------------------------------------------------
-// 辅助：构造一个最小合法的 observation（带 media_window）
+// Helper: build a minimal valid observation with media_window
 // ---------------------------------------------------------------------------
 function makeObservation(overrides: Record<string, unknown> = {}) {
   return {
@@ -52,7 +52,7 @@ function makeObservation(overrides: Record<string, unknown> = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 辅助：构造一个最小合法的 NextStepRequest（模拟 Android 端 payload）
+// Helper: build a minimal valid NextStepRequest that mirrors the Android payload
 // ---------------------------------------------------------------------------
 function makeRequest(overrides: Record<string, unknown> = {}) {
   return {
@@ -72,7 +72,7 @@ function makeRequest(overrides: Record<string, unknown> = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 辅助：构造一个最小合法的 ActionCommand
+// Helper: build a minimal valid ActionCommand
 // ---------------------------------------------------------------------------
 function makeAction(overrides: Record<string, unknown> = {}) {
   return {
@@ -103,7 +103,7 @@ function makeAction(overrides: Record<string, unknown> = {}) {
 }
 
 // ===========================================================================
-// 1. NextStepRequest 契约测试
+// 1. NextStepRequest contract tests
 // ===========================================================================
 describe("NextStepRequestSchema contract", () => {
   it("accepts a valid Android-style payload with media_window", () => {
@@ -170,7 +170,7 @@ describe("NextStepRequestSchema contract", () => {
 });
 
 // ===========================================================================
-// 2. ActionCommand 契约测试
+// 2. ActionCommand contract tests
 // ===========================================================================
 describe("ActionCommandSchema contract", () => {
   it("accepts a valid CLICK action with selector", () => {
@@ -265,7 +265,7 @@ describe("ActionCommandSchema contract", () => {
 });
 
 // ===========================================================================
-// 3. NextStepResponse 契约测试
+// 3. NextStepResponse contract tests
 // ===========================================================================
 describe("NextStepResponseSchema contract", () => {
   it("accepts a valid full response", () => {
@@ -321,7 +321,7 @@ describe("NextStepResponseSchema contract", () => {
 });
 
 // ===========================================================================
-// 4. TelemetryBatchRequest 契约测试
+// 4. TelemetryBatchRequest contract tests
 // ===========================================================================
 describe("TelemetryBatchRequestSchema contract", () => {
   it("accepts a valid telemetry batch", () => {
@@ -358,7 +358,7 @@ describe("TelemetryBatchRequestSchema contract", () => {
 });
 
 // ===========================================================================
-// 5. Android CloudDecisionClient 字段对齐验证
+// 5. Validate field alignment with Android CloudDecisionClient
 // ===========================================================================
 describe("Android CloudDecisionClient field alignment", () => {
   it("Android payload structure matches NextStepRequestSchema exactly", () => {

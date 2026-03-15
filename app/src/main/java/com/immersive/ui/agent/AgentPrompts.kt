@@ -1,12 +1,12 @@
 package com.immersive.ui.agent
 
 /**
- * Agent 模式下发送给 Gemini 的 Prompt 系统
+ * Prompt system sent to Gemini while the app runs in agent mode.
  */
 object AgentPrompts {
 
     /**
-     * Agent 系统 Prompt — 核心指令集
+     * Agent system prompt containing the core instruction set.
      */
     val SYSTEM_PROMPT = """
 你是一个名为"手机导航 Agent"的自主 AI 系统，运行在 Android 手机上。
@@ -106,7 +106,7 @@ object AgentPrompts {
 """.trimIndent()
 
     /**
-     * 自我反思 Prompt — 连续失败后让 AI 分析原因并提出替代策略
+     * Self-reflection prompt used after repeated failures so the AI can analyze causes and propose alternatives.
      */
     val REFLECTION_PROMPT = """
 你是一个 AI Agent 的反思模块。你的任务是分析为什么之前的操作连续失败，并提出一个完全不同的替代路径。
@@ -127,7 +127,7 @@ object AgentPrompts {
 """.trimIndent()
 
     /**
-     * 构建每次请求的动态上下文
+     * Build the dynamic context for each request.
      */
     fun buildDynamicContext(context: AgentContext, uiTreeText: String, userProfileText: String? = null): String {
         val sb = StringBuilder()
@@ -144,14 +144,14 @@ object AgentPrompts {
         sb.appendLine("- 重试次数：${context.retryCount}")
         sb.appendLine()
 
-        // 注入用户偏好画像
+        // Inject the user preference profile.
         if (!userProfileText.isNullOrBlank()) {
             sb.appendLine("【用户画像 — 请参考以个性化操作】")
             sb.appendLine(userProfileText)
             sb.appendLine()
         }
 
-        // 注入任务分解子步骤
+        // Inject task decomposition sub-steps.
         val plan = context.taskPlan
         if (plan != null) {
             sb.appendLine("【任务分解计划】（共 ${plan.steps.size} 步）")
@@ -179,7 +179,7 @@ object AgentPrompts {
             }
         }
 
-        // 注入替代策略（如果有）
+        // Inject alternative strategies when available.
         if (!context.alternativeStrategy.isNullOrBlank()) {
             sb.appendLine("【⚠️ 替代策略 — 之前的方法失败了，请使用新策略】")
             sb.appendLine(context.alternativeStrategy)
@@ -204,7 +204,7 @@ object AgentPrompts {
             sb.appendLine()
         }
 
-        // 注入历史记录（最近 5 步）
+        // Inject recent history (last 5 steps).
         if (context.history.isNotEmpty()) {
             sb.appendLine("【最近执行记录】")
             context.history.takeLast(5).forEach { step ->
@@ -223,7 +223,7 @@ object AgentPrompts {
             sb.appendLine()
         }
 
-        // 注入 UI 树
+        // Inject the UI tree.
         sb.appendLine("【当前屏幕 UI 树】")
         sb.appendLine(uiTreeText)
         sb.appendLine()
@@ -234,7 +234,7 @@ object AgentPrompts {
     }
 
     /**
-     * 构建自我反思的上下文
+     * Build the context used for self-reflection.
      */
     fun buildReflectionContext(context: AgentContext): String {
         val sb = StringBuilder()

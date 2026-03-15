@@ -60,18 +60,18 @@ export const ActionCheckpointSchema = z.object({
 });
 
 // ============================================================================
-// P1 视觉基座革命：Spatial Grounding 归一化坐标
+// P1 visual foundation update: Spatial Grounding normalized coordinates
 // ============================================================================
-// Gemini 2.0+ 的 Spatial Grounding 能力直接输出 0.0-1.0 归一化坐标，
-// 彻底解决游戏、小程序、Flutter 等跨端 UI 的"致盲"问题。
+// Gemini 2.0+ can emit normalized Spatial Grounding coordinates directly in the 0.0-1.0 range,
+// which removes the blind-spot problem for cross-platform UIs such as games, mini-programs, and Flutter.
 //
-// 坐标语义：
-//   spatial_coordinates: [x, y] 其中 x, y ∈ [0.0, 1.0]
-//   - (0.0, 0.0) = 屏幕左上角
-//   - (1.0, 1.0) = 屏幕右下角
-//   - (0.5, 0.5) = 屏幕正中心
+// Coordinate semantics:
+//   spatial_coordinates: [x, y] where x and y are in [0.0, 1.0]
+//   - (0.0, 0.0) = top-left corner of the screen
+//   - (1.0, 1.0) = bottom-right corner of the screen
+//   - (0.5, 0.5) = exact screen center
 //
-// Android 端换算公式：
+// Android conversion formula:
 //   absoluteX = spatial_coordinates[0] * screenWidth
 //   absoluteY = spatial_coordinates[1] * screenHeight
 // ============================================================================
@@ -88,9 +88,9 @@ export const ActionCommandSchema = z.object({
   intent: AgentIntentSchema,
   target_desc: z.string().min(1),
 
-  // ========== P1 新增：Spatial Grounding 原生坐标 ==========
-  // 当 Gemini 返回纯视觉定位坐标时，此字段为首选执行路径。
-  // 优先级：spatial_coordinates > target_som_id > selector > target_bbox
+  // ========== P1 addition: native Spatial Grounding coordinates ==========
+  // When Gemini returns pure visual coordinates, this becomes the preferred execution path.
+  // Priority: spatial_coordinates > target_som_id > selector > target_bbox
   spatial_coordinates: SpatialCoordinatesSchema.nullable().optional(),
 
   // Deprecated but kept for dual-stack Android compatibility window.
@@ -120,9 +120,9 @@ export const ActionCommandSchema = z.object({
     });
   }
 
-  // ========== P1 放宽校验：spatial_coordinates 作为一等公民 ==========
-  // 只要存在 spatial_coordinates，即使完全缺失 selector/target_som_id/target_bbox，
-  // 也允许校验通过并执行 CLICK/TYPE（纯视觉盲打模式）
+  // ========== P1 relaxed validation: treat spatial_coordinates as a first-class field ==========
+  // If spatial_coordinates exists, allow CLICK/TYPE validation even when selector, target_som_id, and target_bbox are all absent.
+  // This enables the pure visual interaction path.
   if (action.intent === "CLICK" || action.intent === "TYPE") {
     const hasSpatialCoords = action.spatial_coordinates != null;
     const hasSelector = action.selector != null;
@@ -184,16 +184,16 @@ export const MobileUiNodeSchema = z.object({
 });
 
 // ============================================================================
-// P1/P2 媒体异步化：GCS URI 引用支持
+// P1/P2 media async path: support GCS URI references
 // ============================================================================
-// Android 端可选择两种媒体传输模式：
-//   1. 内联模式：image_base64 直接包含图片数据（兼容旧版）
-//   2. 引用模式：gcs_uri 指向 GCS 对象，云端按需拉取
+// Android can choose between two media transport modes:
+//   1. Inline mode: image_base64 contains the image bytes directly for legacy compatibility
+//   2. Reference mode: gcs_uri points to a GCS object that the server resolves on demand
 //
-// 引用模式优势：
-//   - 绕过 Cloud Run 带宽瓶颈（Android 直传 GCS）
-//   - 支持大尺寸高清截图
-//   - 便于后续视频流扩展
+// Benefits of reference mode:
+//   - Bypass Cloud Run bandwidth pressure by uploading directly from Android to GCS
+//   - Support large high-resolution screenshots
+//   - Prepare for future video-streaming extensions
 // ============================================================================
 
 export const GcsUriSchema = z
@@ -204,13 +204,13 @@ export const GcsUriSchema = z
 export const LiveFrameSchema = z.object({
   frame_id: z.string().min(1),
   ts_ms: z.number().int().nonnegative(),
-  // 内联模式：直接包含 base64 图片数据
+  // Inline mode: include base64 image data directly
   image_base64: z.string().optional(),
-  // 引用模式：指向 GCS 对象（优先使用）
+  // Reference mode: point to a GCS object and prefer this path
   gcs_uri: GcsUriSchema.optional(),
   ui_signature: z.string().min(1),
 }).superRefine((frame, ctx) => {
-  // 至少需要一种媒体来源
+  // At least one media source must be present
   if (!frame.image_base64?.trim() && !frame.gcs_uri?.trim()) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -400,10 +400,10 @@ export type MobileObservation = z.infer<typeof MobileObservationSchema>;
 export type LiveFrame = z.infer<typeof LiveFrameSchema>;
 
 /**
- * P1/P2 媒体异步化：从 LiveFrame 获取图片数据
+ * P1/P2 media async path: fetch image data from a LiveFrame.
  *
- * 优先级：gcs_uri > image_base64
- * 当使用 gcs_uri 时，需要额外调用 resolveGcsUri 获取实际图片数据
+ * Priority: gcs_uri > image_base64
+ * When gcs_uri is used, call resolveGcsUri to obtain the actual image bytes.
  */
 export function pickLatestObservationFrame(
   observation: MobileObservation,

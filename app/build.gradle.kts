@@ -106,8 +106,8 @@ android {
             "NEXT_PUBLIC_MOCK_MODE",
             localBooleanLiteral("NEXT_PUBLIC_MOCK_MODE", false)
         )
-        // 兼容开关：是否额外发送 screenshot_base64 冗余字段
-        // 默认关闭，仅在调试或服务端兼容回退时打开
+        // Compatibility flag: whether to send the redundant screenshot_base64 field.
+        // Disabled by default; enable only for debugging or server-side fallback compatibility.
         buildConfigField(
             "boolean",
             "SEND_SCREENSHOT_BASE64",

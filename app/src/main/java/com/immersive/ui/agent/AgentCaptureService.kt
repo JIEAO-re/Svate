@@ -34,10 +34,10 @@ import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 
 /**
- * Agent 代理模式专用前台服务 —— 持有 MediaProjection，提供截图能力。
+ * Foreground service dedicated to agent mode that owns the MediaProjection and provides screenshots.
  *
- * Android 14+ 要求 MediaProjection 必须运行在声明了
- * foregroundServiceType="mediaProjection" 的前台 Service 中。
+ * Android 14+ requires MediaProjection to run inside a foreground service that declares
+ * foregroundServiceType="mediaProjection".
  */
 class AgentCaptureService : Service() {
 
@@ -65,7 +65,7 @@ class AgentCaptureService : Service() {
                     return START_NOT_STICKY
                 }
 
-                // API 29+ 必须显式指定 foregroundServiceType
+                // API 29+ must explicitly specify foregroundServiceType.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
                         NOTIFICATION_ID,
@@ -91,7 +91,7 @@ class AgentCaptureService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     // ================================================================
-    // 截图
+    // Screen capture
     // ================================================================
 
     private fun startProjection(resultCode: Int, resultData: Intent) {
@@ -138,10 +138,10 @@ class AgentCaptureService : Service() {
     }
 
     /**
-     * 截取当前屏幕并返回 Base64 编码的 JPEG。
+     * Capture the current screen and return a Base64-encoded JPEG.
      *
-     * 可靠性保证：Bitmap 缩放与 JPEG 编码在 Dispatchers.Default 执行，
-     * 绝不阻塞主线程，避免 ANR。
+     * Reliability guarantee: bitmap scaling and JPEG encoding run on Dispatchers.Default
+     * so the main thread is never blocked and ANRs are avoided.
      */
     suspend fun captureBase64(): String? {
         val reader = imageReader ?: return null
@@ -162,7 +162,7 @@ class AgentCaptureService : Service() {
             return null
         }
 
-        // 将 Bitmap 像素拷贝从 Image 中提取出来（Image 必须在当前线程关闭）
+        // Extract a bitmap copy from Image pixels; Image must be closed on this thread.
         val plane = image.planes[0]
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
@@ -187,7 +187,7 @@ class AgentCaptureService : Service() {
             image.close()
         }
 
-        // 重量级操作（裁剪、缩放、JPEG 编码）移到 Default 线程池
+        // Move heavy work (crop, scale, JPEG encode) to the Default dispatcher pool.
         return withContext(Dispatchers.Default) {
             var cropped: Bitmap? = null
             var scaled: Bitmap? = null
@@ -208,7 +208,7 @@ class AgentCaptureService : Service() {
                     true,
                 )
 
-                // 池化 ByteArrayOutputStream：复用缓冲区，减少 GC 压力
+                // Pool ByteArrayOutputStream instances to reuse buffers and reduce GC pressure.
                 val output = getPooledBuffer()
                 scaled!!.compress(Bitmap.CompressFormat.JPEG, 70, output)
                 Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
@@ -228,8 +228,8 @@ class AgentCaptureService : Service() {
     }
 
     /**
-     * 截取当前屏幕并返回原始 JPEG ByteArray，避免 Base64 编码开销。
-     * 用于 GCS 上传等直传路径。
+     * Capture the current screen and return raw JPEG bytes to avoid Base64 overhead.
+     * Used by direct-upload paths such as GCS.
      */
     suspend fun captureBytes(): ByteArray? {
         val reader = imageReader ?: return null
@@ -308,8 +308,8 @@ class AgentCaptureService : Service() {
     }
 
     /**
-     * 优先使用 captureBytes 路径，默认不生成 Base64；
-     * 仅在兼容链路按需从 imageBytes 派生。
+     * Prefer the captureBytes path and do not generate Base64 by default;
+     * only derive it from imageBytes when a compatibility path needs it.
      */
     suspend fun captureFrame(uiSignature: String): CapturedFrame? {
         val bytes = captureBytes() ?: return null
@@ -366,7 +366,7 @@ class AgentCaptureService : Service() {
     }
 
     // ================================================================
-    // 通知
+    // Notifications
     // ================================================================
 
     private fun buildNotification(): Notification {
@@ -403,10 +403,10 @@ class AgentCaptureService : Service() {
         private const val MIN_CAPTURE_INTERVAL_MS = 450L
         private const val MAX_ACQUIRE_RETRIES = 5
         private const val ACQUIRE_RETRY_DELAY_MS = 300L
-        /** JPEG 编码输出流初始容量（~80KB），减少 ByteArrayOutputStream 扩容拷贝 */
+        /** Initial JPEG output-stream capacity (~80 KB) to reduce ByteArrayOutputStream resize copies. */
         private const val JPEG_BUFFER_INITIAL_CAPACITY = 80 * 1024
 
-        /** 池化 ByteArrayOutputStream：高频截屏时复用缓冲区，避免 GC 抖动 */
+        /** Pool ByteArrayOutputStream instances to reuse buffers during high-frequency captures and avoid GC jitter. */
         private val jpegBufferPool = ThreadLocal<ByteArrayOutputStream>()
         private fun getPooledBuffer(): ByteArrayOutputStream {
             val existing = jpegBufferPool.get()

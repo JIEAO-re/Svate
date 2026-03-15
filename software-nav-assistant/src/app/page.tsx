@@ -10,7 +10,7 @@ import { Smartphone, RefreshCw, Play, Square } from "lucide-react";
 import { StatusIndicator, DemoModeWarningBanner } from "@/components/status-indicator/StatusIndicator";
 
 // ==========================================
-// 核心视图：只有包裹在 Provider 内才能使用 hooks
+// Core view: hooks can only be used when wrapped by the Provider
 // ==========================================
 function MainInterface() {
   const { submitNewScreen, isLoading, context, resetSession, demoMode } = useTaskContext();

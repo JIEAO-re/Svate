@@ -129,7 +129,7 @@ function buildFallback(messages: Array<z.infer<typeof ChatMessageSchema>>) {
 }
 
 export async function POST(req: Request) {
-  // ========== P0 鉴权守卫 ==========
+  // ========== P0 authentication guard ==========
   const authResult = await authenticateRequest(req);
   if (!authResult.valid) {
     return NextResponse.json(

@@ -48,7 +48,7 @@ class CloudDecisionClient {
     private val mode = BuildConfig.MOBILE_AGENT_MODE.lowercase()
         .takeIf { it == "shadow" || it == "active" }
         ?: "active"
-    /** 灰度开关：是否在 observation 中发送 screenshot_base64 兼容字段 */
+    /** Rollout flag controlling whether observation includes the compatibility screenshot_base64 field. */
     private val sendScreenshotBase64 = BuildConfig.SEND_SCREENSHOT_BASE64
     /** P0: Auth token for cloud API authentication */
     private val authToken: String = BuildConfig.MOBILE_AGENT_AUTH_TOKEN
@@ -188,7 +188,7 @@ class CloudDecisionClient {
                 "observation",
                 JSONObject().apply {
                     put("observation_reason", observationReason.name)
-                    // 服务端 schema 对齐：current_app（主字段）+ foreground_package（兼容）
+                    // Server schema alignment: current_app is primary, foreground_package is kept for compatibility.
                     put("current_app", foregroundPackage)
                     put("foreground_package", foregroundPackage)
                     put(
@@ -216,16 +216,16 @@ class CloudDecisionClient {
                     if (!frameFingerprint.isNullOrBlank()) {
                         put("frame_fingerprint", frameFingerprint)
                     }
-                    // 服务端 schema 对齐：ui_tree_xml（XML 格式 UI 树文本）
+                    // Server schema alignment: ui_tree_xml contains the UI tree serialized as XML text.
                     if (!uiTreeXml.isNullOrBlank()) {
                         put("ui_tree_xml", uiTreeXml)
                     }
-                    // 服务端 schema 对齐：screen_description（屏幕描述摘要）
+                    // Server schema alignment: screen_description contains the screen summary.
                     if (!screenDescription.isNullOrBlank()) {
                         put("screen_description", screenDescription)
                     }
-                    // 灰度开关控制：screenshot_base64 兼容字段
-                    // 服务端迁移完成后可通过 BuildConfig.SEND_SCREENSHOT_BASE64 关闭
+                    // Rollout flag controlling the compatibility screenshot_base64 field.
+                    // After the server migration is complete, disable it via BuildConfig.SEND_SCREENSHOT_BASE64.
                     if (sendScreenshotBase64) {
                         frames.last().inlineImageBase64OrNull()
                             ?.takeIf { it.isNotBlank() }
@@ -262,7 +262,7 @@ class CloudDecisionClient {
         val targetSomId = actionObj.optInt("target_som_id", -1).takeIf { it > 0 }
         val intentSpec = actionObj.optJSONObject("intent_spec")?.let { parseIntentSpec(it) }
 
-        // ========== P1 新增：解析 Spatial Grounding 坐标 ==========
+        // ========== P1 addition: parse Spatial Grounding coordinates ==========
         val spatialCoordinates = actionObj.optJSONArray("spatial_coordinates")
             ?.takeIf { it.length() == 2 }
             ?.let { arr ->

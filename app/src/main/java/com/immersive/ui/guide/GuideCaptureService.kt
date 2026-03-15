@@ -68,7 +68,7 @@ class GuideCaptureService : Service() {
                     return START_NOT_STICKY
                 }
 
-                // API 29+ 必须显式指定 foregroundServiceType
+                // API 29+ must explicitly specify foregroundServiceType.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
                         NOTIFICATION_ID,

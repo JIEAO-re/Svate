@@ -9,19 +9,19 @@ import com.immersive.ui.agent.TaskPlanner
 import com.immersive.ui.agent.TaskSpec
 
 /**
- * 规划模块：决策规划逻辑
+ * Planning module: decision planning logic.
  *
- * 从 OpenClawOrchestrator 拆分而来，负责：
- * - 任务分解（调用 TaskPlanner）
- * - 请求云端决策（通过 LiveDecisionChannel）
- * - 历史记忆检索
+ * Extracted from OpenClawOrchestrator, responsible for:
+ * - Task decomposition through TaskPlanner
+ * - Requesting cloud decisions through LiveDecisionChannel
+ * - Retrieving historical memory
  */
 class PlanningModule(
     private val context: Context,
     private val decisionChannel: LiveDecisionChannel,
 ) {
     /**
-     * 分解任务为子步骤计划
+     * Decompose a task into a sub-step plan.
      */
     suspend fun decompose(
         goal: String,
@@ -38,7 +38,7 @@ class PlanningModule(
     }
 
     /**
-     * 请求云端决策
+     * Request a decision from the cloud.
      */
     suspend fun requestDecision(
         ctx: AgentContext,

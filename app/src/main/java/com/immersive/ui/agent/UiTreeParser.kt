@@ -4,7 +4,7 @@ import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * 精简的 UI 节点信息，从 AccessibilityNodeInfo 中提取
+ * Simplified UI node data extracted from AccessibilityNodeInfo.
  */
 data class UiNode(
     val index: Int,
@@ -24,13 +24,13 @@ data class UiNode(
 )
 
 /**
- * 将 AccessibilityNodeInfo 树解析为结构化的 UiNode 列表，
- * 并生成适合注入 Gemini Prompt 的文本描述。
+ * Parse the AccessibilityNodeInfo tree into a structured UiNode list
+ * and generate a text description suitable for Gemini prompts.
  */
 object UiTreeParser {
 
     /**
-     * 从根节点遍历整棵 UI 树，提取所有有意义的节点
+     * Traverse the full UI tree from the root node and extract meaningful nodes.
      */
     fun parse(root: AccessibilityNodeInfo?): List<UiNode> {
         if (root == null) return emptyList()
@@ -43,8 +43,8 @@ object UiTreeParser {
     }
 
     /**
-     * 将 UiNode 列表格式化为 Gemini 可理解的文本。
-     * 只保留有交互意义的节点（可点击、可滚动、可编辑、有文本）。
+     * Format a UiNode list as text that Gemini can understand.
+     * Keep only nodes with interaction value (clickable, scrollable, editable, or textual).
      */
     fun formatForPrompt(nodes: List<UiNode>, maxNodes: Int = 60): String {
         val meaningful = nodes.filter { node ->
@@ -92,14 +92,14 @@ object UiTreeParser {
         depth: Int = 0,
         screenBounds: Rect,
     ) {
-        // 防止 UI 树过深导致 StackOverflowError
+        // Prevent StackOverflowError when the UI tree becomes too deep.
         if (depth > 25) return
 
         try {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
 
-            // 过滤不可见或极小的节点
+            // Filter out invisible or tiny nodes.
             if (bounds.width() > 0 && bounds.height() > 0) {
                 val isVisible = node.isVisibleToUser
                 val isWithinScreen = bounds.right > screenBounds.left &&
@@ -129,7 +129,7 @@ object UiTreeParser {
                 traverseNode(child, result, indexCounter, depth + 1, screenBounds)
             }
         } catch (_: Exception) {
-            // AccessibilityNodeInfo 可能已失效（stale node），安全忽略
+            // AccessibilityNodeInfo can become stale; ignore it safely.
         }
     }
 }

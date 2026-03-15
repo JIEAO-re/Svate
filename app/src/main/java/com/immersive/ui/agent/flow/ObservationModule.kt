@@ -7,12 +7,12 @@ import com.immersive.ui.agent.CapturedFrame
 import com.immersive.ui.agent.UiNode
 
 /**
- * 观察模块：截图/帧采集与 UI tree 解析
+ * Observation module: screenshot/frame capture and UI tree parsing.
  *
- * 从 OpenClawOrchestrator 拆分而来，负责：
- * - 获取当前屏幕 UI 节点
- * - 截图帧采集
- * - GCS 异步上传（旁路，不阻塞主流程）
+ * Extracted from OpenClawOrchestrator, responsible for:
+ * - Fetching UI nodes from the current screen
+ * - Capturing screenshot frames
+ * - Uploading screenshots to GCS asynchronously without blocking the main flow
  */
 class ObservationModule(
     private val gcsUploader: GcsAsyncUploader,
@@ -22,37 +22,37 @@ class ObservationModule(
     }
 
     /**
-     * 获取无障碍服务实例（非空时可用）
+     * Get the accessibility service instance when available.
      */
     fun getAccessibilityService(): AgentAccessibilityService? {
         return AgentAccessibilityService.instance
     }
 
     /**
-     * 获取截图服务实例
+     * Get the capture service instance.
      */
     fun getCaptureService(): AgentCaptureService? {
         return AgentCaptureService.instance
     }
 
     /**
-     * 获取当前前台包名
+     * Get the current foreground package name.
      */
     fun getForegroundPackage(): String? {
         return AgentAccessibilityService.instance?.getForegroundPackageName()
     }
 
     /**
-     * 获取当前 UI 节点列表
+     * Get the current UI node list.
      */
     fun getUiNodes(): List<UiNode> {
         return AgentAccessibilityService.instance?.getUiNodes() ?: emptyList()
     }
 
     /**
-     * 异步上传截图到 GCS，返回 gs:// URI（失败返回 null）
+     * Upload the screenshot to GCS asynchronously and return a gs:// URI, or null on failure.
      *
-     * 优先使用原始 ByteArray（跳过 Base64 解码），兼容旧路径。
+     * Prefer raw ByteArray input to avoid Base64 decoding, while staying compatible with the legacy path.
      */
     suspend fun uploadScreenshotToGcs(
         imageBytes: ByteArray? = null,

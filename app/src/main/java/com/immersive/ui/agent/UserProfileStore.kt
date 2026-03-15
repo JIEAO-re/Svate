@@ -7,7 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 用户画像
+ * User profile.
  */
 data class UserProfile(
     val preferences: MutableList<String> = mutableListOf(),  // "喜欢用微信视频通话"
@@ -17,7 +17,7 @@ data class UserProfile(
 )
 
 /**
- * 用户偏好提取与持久化 — 每次对话结束后提取偏好，下次对话自动注入。
+ * Extract and persist user preferences after each conversation, then inject them into later turns.
  */
 object UserProfileStore {
 
@@ -57,7 +57,7 @@ object UserProfileStore {
     }
 
     /**
-     * 从对话中提取用户偏好并合并到现有画像
+     * Extract user preferences from a conversation and merge them into the existing profile.
      */
     fun extractAndMerge(ctx: Context, messages: List<ChatMsg>) {
         if (messages.size < 3) return
@@ -98,12 +98,12 @@ $recent
 
             save(ctx, existing)
         } catch (_: Exception) {
-            // 提取失败不影响主流程
+            // Extraction failures must not affect the main flow.
         }
     }
 
     /**
-     * 格式化用户画像，用于注入 Prompt
+     * Format the user profile for prompt injection.
      */
     fun formatForPrompt(ctx: Context): String? {
         val profile = load(ctx)

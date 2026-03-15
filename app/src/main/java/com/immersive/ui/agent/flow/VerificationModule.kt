@@ -9,18 +9,18 @@ import com.immersive.ui.agent.StepRecord
 import com.immersive.ui.agent.UiNode
 
 /**
- * 验证模块：执行后验证
+ * Verification module: post-execution validation.
  *
- * 从 OpenClawOrchestrator 拆分而来，负责：
- * - 执行后 UI 状态校验（checkpoint 匹配）
- * - 构建 StepRecord
- * - 成功任务记忆保存
+ * Extracted from OpenClawOrchestrator, responsible for:
+ * - Validating post-execution UI state against checkpoints
+ * - Building StepRecord entries
+ * - Saving successful task memories
  */
 class VerificationModule(
     private val context: Context,
 ) {
     /**
-     * 获取执行后的 UI 节点和前台包名
+     * Get post-execution UI nodes and the foreground package name.
      */
     fun getPostExecutionState(): Pair<List<UiNode>, String?> {
         val nodes = AgentAccessibilityService.instance?.getUiNodes() ?: emptyList()
@@ -29,7 +29,7 @@ class VerificationModule(
     }
 
     /**
-     * 验证 checkpoint 是否匹配
+     * Verify whether the checkpoint matches.
      */
     fun verifyCheckpoint(
         action: AgentAction,
@@ -54,7 +54,7 @@ class VerificationModule(
     }
 
     /**
-     * 构建步骤记录
+     * Build a step record.
      */
     fun buildStepRecord(
         stepIndex: Int,
@@ -79,7 +79,7 @@ class VerificationModule(
     }
 
     /**
-     * 保存成功任务到记忆
+     * Save a successful task to memory.
      */
     suspend fun saveMemory(ctx: AgentContext) {
         if (ctx.history.isEmpty()) return

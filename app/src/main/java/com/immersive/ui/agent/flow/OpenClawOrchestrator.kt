@@ -25,30 +25,30 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * OpenClawOrchestrator — Svate 产品的核心编排器（Facade）
+ * OpenClawOrchestrator: the core facade orchestrator behind the Svate product.
  *
- * 名称说明：类名 "OpenClaw" 源自 Open Claw 项目（历史代号），当前产品名为 Svate。
- * 保留类名以兼容外部引用，但产品层面统一使用 Svate 品牌。
+ * Naming note: "OpenClaw" comes from the historical Open Claw codename, while the
+ * current product name is Svate. The class name stays unchanged for compatibility,
  *
- * 架构演进：
- * - 从单体类拆解为六个职责单一的子模块，本类作为门面（Facade）组合调用
- * - 用 Kotlin Coroutines Flow + Actor 模式替代死循环与死板 wait
+ * Architecture evolution:
+ * - Split the original monolith into six single-purpose modules and keep this class as the facade
+ * - Replace rigid loops and waits with Kotlin Coroutines Flow plus an actor-style pipeline
  *
- * 子模块：
- * 1. ObservationModule  — 截图/帧采集与 UI tree 解析
- * 2. PlanningModule     — 决策规划逻辑
- * 3. SafetyModule       — 安全检查与风险拦截
- * 4. ExecutionModule    — 动作执行
- * 5. VerificationModule — 执行后验证
- * 6. TelemetryModule    — 遥测上报
+ * Child modules:
+ * 1. ObservationModule  ? screenshot/frame capture and UI tree parsing
+ * 2. PlanningModule     ? decision planning logic
+ * 3. SafetyModule       ? safety checks and risk interception
+ * 4. ExecutionModule    ? action execution
+ * 5. VerificationModule ? post-execution verification
+ * 6. TelemetryModule    ? telemetry reporting
  *
- * 四条流水线（底层组件）：
- * 1. VisualPerceptionFlow（感知器）：高频抽帧、指纹计算、弹窗快反射
- * 2. LiveDecisionChannel（通信层）：维持长连接、推流、接收动作
- * 3. EdgeSecurityGuard（守卫链）：洗稿高风险动作、Human-in-the-loop
- * 4. AccessibilityMotor（执行器）：坐标驱动底层执行
+ * Four lower-level pipelines:
+ * 1. VisualPerceptionFlow: high-frequency frame sampling, fingerprinting, and popup quick reactions
+ * 2. LiveDecisionChannel: persistent communication, frame streaming, and action delivery
+ * 3. EdgeSecurityGuard: sanitizing risky actions and handling human-in-the-loop confirmation
+ * 4. AccessibilityMotor: coordinate-driven low-level execution
  *
- * 数据流：
+ * Data flow:
  * Observation -> Planning -> Safety -> Execution -> Verification -> Loop
  */
 class OpenClawOrchestrator(
@@ -59,14 +59,14 @@ class OpenClawOrchestrator(
         private const val STARTUP_GUARD_MS = 8_000L
     }
 
-    // ========== 四条底层流水线 ==========
+    // ========== Four lower-level pipelines ==========
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var perceptionFlow: VisualPerceptionFlow
     private lateinit var decisionChannel: LiveDecisionChannel
     private lateinit var securityGuard: EdgeSecurityGuard
     private lateinit var motor: AccessibilityMotor
 
-    // ========== 六个子模块 ==========
+    // ========== Six child modules ==========
     private lateinit var observationModule: ObservationModule
     private lateinit var planningModule: PlanningModule
     private lateinit var safetyModule: SafetyModule
@@ -74,16 +74,16 @@ class OpenClawOrchestrator(
     private lateinit var verificationModule: VerificationModule
     private lateinit var telemetryModule: TelemetryModule
 
-    // ========== P2 媒体异步化 ==========
+    // ========== P2 media async path ==========
     private val gcsUploader = GcsAsyncUploader(scope)
 
-    // ========== 状态管理 ==========
+    // ========== State management ==========
     private val mainHandler = Handler(Looper.getMainLooper())
     private val isRunning = AtomicBoolean(false)
     private val agentContext = AtomicReference(AgentContext())
     private var orchestratorJob: Job? = null
 
-    // ========== 外部回调 ==========
+    // ========== External callbacks ==========
     var onPhaseChanged: ((AgentPhase, String) -> Unit)? = null
     var onNarration: ((String) -> Unit)? = null
     var onRequestConfirm: ((AgentAction, (Boolean) -> Unit) -> Unit)? = null
@@ -92,13 +92,13 @@ class OpenClawOrchestrator(
     var onCompleted: ((String) -> Unit)? = null
     var onFailed: ((String) -> Unit)? = null
 
-    // ========== 内部状态 ==========
+    // ========== Internal state ==========
     private var pendingTargetPackage: String? = null
     private var startupGuardUntilMs: Long = 0L
     private var lastObservationReason: ObservationReason = ObservationReason.APP_START
 
     /**
-     * 启动 Agent
+     * Start the agent.
      */
     fun start(
         goal: String,
@@ -107,13 +107,13 @@ class OpenClawOrchestrator(
     ) {
         if (isRunning.getAndSet(true)) return
 
-        // 初始化四条底层流水线
+        // Initialize the four lower-level pipelines.
         perceptionFlow = VisualPerceptionFlow(scope)
         decisionChannel = LiveDecisionChannel(scope)
         securityGuard = EdgeSecurityGuard(context)
         motor = AccessibilityMotor(context, scope)
 
-        // 初始化六个子模块
+        // Initialize the six child modules.
         observationModule = ObservationModule(gcsUploader)
         planningModule = PlanningModule(context, decisionChannel)
         safetyModule = SafetyModule(securityGuard)
@@ -121,10 +121,10 @@ class OpenClawOrchestrator(
         verificationModule = VerificationModule(context)
         telemetryModule = TelemetryModule(context)
 
-        // 绑定安全守卫的用户确认回调
+        // Bind the user-confirmation callback for the safety guard.
         safetyModule.bindConfirmCallback(onRequestConfirm)
 
-        // 初始化上下文
+        // Initialize the context.
         agentContext.set(
             AgentContext(
                 globalGoal = goal,
@@ -135,12 +135,12 @@ class OpenClawOrchestrator(
             ),
         )
 
-        // 启动编排循环
+        // Start the orchestration loop.
         orchestratorJob = scope.launch { orchestratorLoop() }
     }
 
     /**
-     * 停止 Agent
+     * Stop the agent.
      */
     fun stop() {
         isRunning.set(false)
@@ -155,11 +155,11 @@ class OpenClawOrchestrator(
     }
 
     /**
-     * 主编排循环 — 组合调用各子模块
+     * Main orchestration loop that composes the child modules.
      */
     private suspend fun orchestratorLoop() {
         try {
-            // 1. 等待服务就绪
+            // 1. Wait for services to become ready.
             val startupFailure = waitServicesReady()
             if (startupFailure != null) {
                 updatePhase(AgentPhase.FAILED, startupFailure)
@@ -167,14 +167,14 @@ class OpenClawOrchestrator(
                 return
             }
 
-            // 2. 查询可启动应用（ExecutionModule）
+            // 2. Query launchable apps (ExecutionModule).
             val launchablePackages = executionModule.queryLaunchablePackages()
 
-            // 3. 发送 session_start 遥测（TelemetryModule）
+            // 3. Emit session_start telemetry (TelemetryModule).
             val sessionCtx = agentContext.get()
             telemetryModule.reportSessionStart(sessionCtx)
 
-            // 4. 任务分解（PlanningModule）
+            // 4. Decompose the task (PlanningModule).
             updatePhase(AgentPhase.DECOMPOSING, "Decomposing the task into steps...")
             val baseCtx = agentContext.get()
             val plan = planningModule.decompose(
@@ -187,7 +187,7 @@ class OpenClawOrchestrator(
                 postNarration("Plan generated: ${plan.steps.joinToString(" -> ") { it.description }}")
             }
 
-            // 5. 尝试直接打开目标应用（ExecutionModule）
+            // 5. Try to open the target app directly (ExecutionModule).
             val targetApp = agentContext.get().targetAppName
             val openedPackage = executionModule.tryDirectOpenApp(targetApp)
             if (openedPackage != null) {
@@ -196,11 +196,11 @@ class OpenClawOrchestrator(
                 startupGuardUntilMs = System.currentTimeMillis() + STARTUP_GUARD_MS
             }
 
-            // 6. 启动感知流和通信通道
+            // 6. Start the perception flow and communication channel.
             perceptionFlow.start()
             decisionChannel.start()
 
-            // 7. 订阅弹窗事件
+            // 7. Subscribe to popup events.
             scope.launch {
                 perceptionFlow.popupDetected.collect { event ->
                     Log.d(TAG, "Popup detected: ${event.popup.type}")
@@ -208,7 +208,7 @@ class OpenClawOrchestrator(
                 }
             }
 
-            // 8. 主循环：消费感知快照
+            // 8. Main loop: consume perception snapshots.
             perceptionFlow.snapshots
                 .takeWhile { isRunning.get() && !agentContext.get().isTerminal() }
                 .collect { snapshot ->
@@ -220,7 +220,7 @@ class OpenClawOrchestrator(
                     return@collect
                 }
 
-                // 检查步数限制
+                // Check the step limit.
                 if (ctx.isOverStepLimit()) {
                     updatePhase(AgentPhase.FAILED, "Step limit exceeded.")
                     postFailed("Too many steps. Manual takeover is recommended.")
@@ -228,17 +228,17 @@ class OpenClawOrchestrator(
                     return@collect
                 }
 
-                // 启动守卫检查
+                // Run guard checks.
                 if (!passStartupGuard(snapshot)) return@collect
 
-                // ObservationModule: 异步上传截图到 GCS
+                // ObservationModule: upload screenshots to GCS asynchronously.
                 val gcsUri = observationModule.uploadScreenshotToGcs(
                     imageBytes = snapshot.frame.imageBytes,
                     traceId = ctx.traceId ?: "",
                     stepIndex = ctx.stepIndex,
                 )
 
-                // PlanningModule: 请求决策
+                // PlanningModule: request a decision.
                 updatePhase(AgentPhase.PLANNING, "Planning the next action...")
                 val decisionResult = planningModule.requestDecision(
                     ctx = ctx,
@@ -252,7 +252,7 @@ class OpenClawOrchestrator(
                     return@collect
                 }
 
-                // 更新上下文
+                // Update the context.
                 agentContext.set(ctx.copy(
                     serverLatencyMs = (decisionResult.plannerLatencyMs + decisionResult.reviewerLatencyMs).toLong(),
                     lastReviewerVerdict = decisionResult.reviewerVerdict,
@@ -260,7 +260,7 @@ class OpenClawOrchestrator(
 
                 var action = decisionResult.action
 
-                // SafetyModule: 安全守卫洗稿
+                // SafetyModule: sanitize the action with safety guards.
                 val sanitizeResult = safetyModule.sanitize(
                     action = action,
                     taskSpec = ctx.taskSpec,
@@ -273,7 +273,7 @@ class OpenClawOrchestrator(
                     action = sanitizeResult.action
                 }
 
-                // 检查是否完成
+                // Check whether the task is complete.
                 if (action.intent == ActionIntent.FINISH) {
                     updatePhase(AgentPhase.COMPLETED, "Task completed.")
                     verificationModule.saveMemory(agentContext.get())
@@ -282,7 +282,7 @@ class OpenClawOrchestrator(
                     return@collect
                 }
 
-                // ExecutionModule: 执行动作
+                // ExecutionModule: execute the action.
                 updatePhase(AgentPhase.EXECUTING, action.elderlyNarration)
                 postNarration(action.elderlyNarration)
 
@@ -292,10 +292,10 @@ class OpenClawOrchestrator(
                     somMarkerMap = perceptionFlow.getLastSomMarkerMap(),
                 )
 
-                // 等待 UI 稳定
+                // Wait for the UI to settle.
                 delay(900)
 
-                // VerificationModule: 验证执行结果
+                // VerificationModule: validate the execution result.
                 updatePhase(AgentPhase.VERIFYING, "Verifying action result...")
                 val (postNodes, postPackage) = verificationModule.getPostExecutionState()
                 val checkpointMatched = verificationModule.verifyCheckpoint(action, postPackage, postNodes)
@@ -320,10 +320,10 @@ class OpenClawOrchestrator(
                     consecutiveFailCount = if (stepSuccess) 0 else afterCtx.consecutiveFailCount + 1,
                 ))
 
-                // 更新观察原因
+                // Update the observation reason.
                 lastObservationReason = ObservationReason.AFTER_ACTION
 
-                // 处理失败
+                // Handle failures.
                 if (!stepSuccess) {
                     handleExecutionFailure()
                 }
@@ -333,7 +333,7 @@ class OpenClawOrchestrator(
             updatePhase(AgentPhase.FAILED, "Unexpected error: ${t.message}")
             postFailed("Agent encountered an issue. Please retry.")
         } finally {
-            // TelemetryModule: 上报 session 结束
+            // TelemetryModule: report session end.
             telemetryModule.reportSessionEnd(agentContext.get())
             isRunning.set(false)
             perceptionFlow.stop()
@@ -341,7 +341,7 @@ class OpenClawOrchestrator(
         }
     }
 
-    // ========== 辅助方法 ==========
+    // ========== Helper methods ==========
 
     private suspend fun waitServicesReady(): String? {
         var waitCount = 0
@@ -404,7 +404,7 @@ class OpenClawOrchestrator(
         }
     }
 
-    // ========== UI 回调 ==========
+    // ========== UI callbacks ==========
 
     private fun updatePhase(phase: AgentPhase, message: String) {
         val ctx = agentContext.get()

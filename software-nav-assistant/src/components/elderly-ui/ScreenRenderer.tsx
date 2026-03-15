@@ -7,10 +7,10 @@ import { SessionState } from "@/lib/schemas/state-machine";
 export function ScreenRenderer() {
   const { latestImageBase64, currentDecision, context, isLoading } = useTaskContext();
 
-  // 解析出 AI 给定的坐标 [ymin, xmin, ymax, xmax] (0-1000)
+  // Parse AI-provided coordinates in [ymin, xmin, ymax, xmax] format (0-1000)
   const bbox = currentDecision?.next_step?.target_bbox;
 
-  // 安全判定：只有状态明确，且没有高危风险时，才允许画框
+  // Draw boxes only when the status is explicit and no high-risk state is active
   const shouldRenderBox =
     bbox &&
     bbox.length === 4 &&
@@ -46,7 +46,7 @@ export function ScreenRenderer() {
               key={lockAnimationKey}
               className="absolute pointer-events-none z-10 transition-all duration-300 lock-target-frame"
               style={{
-                // 坐标换算：Gemini 坐标是 (ymin, xmin, ymax, xmax) 范围 0-1000
+                // Coordinate conversion: Gemini uses (ymin, xmin, ymax, xmax) in the 0-1000 range
                 top: `${(bbox[0] / 10) }%`,
                 left: `${(bbox[1] / 10) }%`,
                 height: `${((bbox[2] - bbox[0]) / 10) }%`,

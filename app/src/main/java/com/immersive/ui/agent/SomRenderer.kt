@@ -11,19 +11,19 @@ import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
 /**
- * SoM (Set-of-Mark) 渲染器。
+ * SoM (Set-of-Mark) renderer.
  *
- * 在截图上为每个可交互 UI 节点绘制带编号的红色半透明框，
- * 让 Gemini 只需返回编号 ID 而不用猜坐标，准确率逼近 99%。
+ * Draw numbered translucent red boxes for interactive UI nodes on top of the screenshot
+ * so Gemini can return marker IDs instead of guessing coordinates.
  *
- * 输出：标注后的截图 Base64 + Map<编号, UiNode> 映射表
+ * Output: the annotated screenshot as Base64 plus a Map<markerId, UiNode>.
  */
 object SomRenderer {
 
     data class SomResult(
-        /** Base64 编码的标注后截图 */
+        /** Annotated screenshot encoded as Base64. */
         val annotatedImageBase64: String,
-        /** SoM 编号 → UiNode 的映射表 */
+        /** Mapping from SoM marker IDs to UiNode objects. */
         val markerMap: Map<Int, UiNode>,
     )
 
@@ -51,8 +51,8 @@ object SomRenderer {
     }
 
     /**
-     * 过滤出有交互价值的节点（可点击/可编辑/可滚动/有文本内容）。
-     * 这也做了 UI 树的深度剪枝——去掉纯装饰性节点。
+     * Filter nodes that provide interaction value (clickable, editable, scrollable, or text-bearing).
+     * This also prunes the UI tree deeply by removing purely decorative nodes.
      */
     fun filterInteractiveNodes(nodes: List<UiNode>): List<UiNode> {
         return nodes.filter { node ->
@@ -64,13 +64,13 @@ object SomRenderer {
     }
 
     /**
-     * 在截图 Bitmap 上绘制 SoM 标注。
+     * Draw SoM annotations on the screenshot bitmap.
      *
-     * @param screenshotBytes 原始截图的 JPEG bytes
-     * @param interactiveNodes 已过滤的可交互节点列表
-     * @param screenWidth 真实屏幕像素宽度
-     * @param screenHeight 真实屏幕像素高度
-     * @return SomResult 包含标注图 Base64 和映射表
+     * @param screenshotBytes Raw JPEG bytes of the screenshot.
+     * @param interactiveNodes Filtered list of interactive nodes.
+     * @param screenWidth Actual screen width in pixels.
+     * @param screenHeight Actual screen height in pixels.
+     * @return A SomResult containing the annotated image Base64 and the marker map.
      */
     fun render(
         screenshotBytes: ByteArray,
@@ -90,25 +90,25 @@ object SomRenderer {
         val bitmapWidth = originalBitmap.width
         val bitmapHeight = originalBitmap.height
 
-        // 截图分辨率可能与屏幕分辨率不同（截图时做了缩放），需要计算比例
+        // The screenshot resolution may differ from the real screen resolution, so compute a scale ratio.
         val scaleX = bitmapWidth.toFloat() / screenWidth
         val scaleY = bitmapHeight.toFloat() / screenHeight
 
-        // 在副本上绘制
+        // Draw on a mutable copy.
         val annotated = originalBitmap.copy(Bitmap.Config.ARGB_8888, true)
         originalBitmap.recycle()
 
         val canvas = Canvas(annotated)
         val markerMap = mutableMapOf<Int, UiNode>()
 
-        // 限制最多标注 30 个节点，避免截图过于拥挤
+        // Limit the overlay to 30 markers to keep the screenshot readable.
         val nodesToMark = interactiveNodes.take(30)
 
         nodesToMark.forEachIndexed { index, node ->
             val markerId = index + 1 // 从 1 开始编号
             markerMap[markerId] = node
 
-            // 将屏幕坐标转为截图坐标，先 clamp 屏幕坐标防止越界
+            // Convert screen coordinates to screenshot coordinates and clamp first to avoid overflow.
             val clampedLeft = node.bounds.left.coerceIn(0, screenWidth)
             val clampedTop = node.bounds.top.coerceIn(0, screenHeight)
             val clampedRight = node.bounds.right.coerceIn(0, screenWidth)
@@ -121,11 +121,11 @@ object SomRenderer {
 
             val rect = Rect(left, top, right, bottom)
 
-            // 绘制半透明填充 + 红色边框
+            // Draw the translucent fill and red border.
             canvas.drawRect(rect, fillPaint)
             canvas.drawRect(rect, borderPaint)
 
-            // 在左上角绘制编号徽章
+            // Draw the numbered badge in the top-left corner.
             val label = markerId.toString()
             val textWidth = textPaint.measureText(label)
             val badgeWidth = textWidth + 12f
@@ -136,12 +136,12 @@ object SomRenderer {
             val badgeRight = (badgeLeft + badgeWidth).coerceAtMost(bitmapWidth.toFloat())
             val badgeBottom = (badgeTop + badgeHeight).coerceAtMost(bitmapHeight.toFloat())
 
-            // 白底圆角矩形
+            // White rounded rectangle background.
             canvas.drawRoundRect(
                 badgeLeft, badgeTop, badgeRight, badgeBottom,
                 6f, 6f, badgePaint,
             )
-            // 黑色数字
+            // Black marker text.
             canvas.drawText(
                 label,
                 badgeLeft + badgeWidth / 2f,
@@ -150,7 +150,7 @@ object SomRenderer {
             )
         }
 
-        // 编码为 Base64
+        // Encode to Base64.
         val output = ByteArrayOutputStream()
         annotated.compress(Bitmap.CompressFormat.JPEG, 75, output)
         annotated.recycle()

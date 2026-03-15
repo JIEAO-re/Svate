@@ -1,6 +1,6 @@
 /**
- * 系统的全局 FSM（有限状态机）节点
- * 物理围栏：任何时刻，系统只能处于以下某一个状态
+ * Global FSM (finite-state machine) nodes for the system.
+ * Physical guardrail: the system can be in only one of these states at any time.
  */
 export enum SessionState {
   IDLE = "IDLE", // 初始状态，等待设置目标
@@ -12,7 +12,7 @@ export enum SessionState {
 }
 
 /**
- * 长辈的快捷物理反馈按键枚举
+ * Enumerates the elderly user's quick physical feedback buttons.
  */
 export enum UserFeedback {
   NONE = "NONE", // 正常推进
@@ -22,8 +22,8 @@ export enum UserFeedback {
 }
 
 /**
- * 验证检查点 (Checkpoint)
- * 用于 Verifier 判断上一步长辈是否操作成功的唯一“标尺”
+ * Verification checkpoint.
+ * The only reference point used by the verifier to judge whether the previous step succeeded.
  */
 export interface StepCheckpoint {
   expected_page_type: string; // 期望进入的页面类型 (如："聊天详情页")
@@ -31,8 +31,8 @@ export interface StepCheckpoint {
 }
 
 /**
- * 会话上下文 Context (Fat Payload)
- * 每次请求 API 时，前端需将此对象随最新截图一起 POST 给后端
+ * Session context payload.
+ * The frontend sends this object with the latest screenshot on every API request.
  */
 export interface TaskContext {
   session_id: string;
@@ -40,7 +40,7 @@ export interface TaskContext {
   current_step_index: number; // 当前是第几步 (防死循环拦截，超过10步强制终止)
   state: SessionState;
 
-  // 🛡️ 核心防线：上一步我们让长辈干了什么？期待看到什么？
+  // Core guardrail: what did we ask the elderly user to do last, and what did we expect to see?
   last_action_desc: string | null;
   last_checkpoint: StepCheckpoint | null;
 

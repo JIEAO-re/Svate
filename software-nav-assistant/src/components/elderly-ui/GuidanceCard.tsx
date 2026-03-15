@@ -8,7 +8,7 @@ import { AlertTriangle, EyeOff, Rewind, RefreshCw, CheckCircle } from "lucide-re
 export function GuidanceCard() {
   const { context, currentDecision, isLoading, triggerUserFeedback, resetSession } = useTaskContext();
 
-  // 场景 1: 初始等待
+  // Scenario 1: initial waiting state
   if (context.state === SessionState.IDLE && !isLoading) {
     return (
       <div className="bg-white p-6 rounded-3xl shadow-lg border-2 border-gray-100 mt-6 text-center">
@@ -18,7 +18,7 @@ export function GuidanceCard() {
     );
   }
 
-  // 场景 2: 🚨 高危物理熔断 (Demo 拿分点，绝对的视觉冲击)
+  // Scenario 2: high-risk hard stop with strong visual emphasis for the demo
   if (context.state === SessionState.RISK_PAUSED || currentDecision?.next_step?.risk_level === "HIGH") {
     return (
       <div className="bg-red-50 p-6 rounded-3xl shadow-2xl border-4 border-red-500 mt-6 animate-in slide-in-from-bottom-4">
@@ -40,7 +40,7 @@ export function GuidanceCard() {
     );
   }
 
-  // 场景 3: 成功完成
+  // Scenario 3: success state
   if (context.state === SessionState.COMPLETED) {
     return (
       <div className="bg-green-50 p-6 rounded-3xl shadow-lg border-4 border-green-500 mt-6 text-center">
@@ -52,7 +52,7 @@ export function GuidanceCard() {
     );
   }
 
-  // 场景 4: 正常指引输出 (主链路与降级恢复)
+  // Scenario 4: normal guidance output for the main path and recovery flow
   const isRecovering = context.state === SessionState.RECOVERING;
 
   return (

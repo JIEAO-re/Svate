@@ -15,8 +15,8 @@ export type ArbiterResult = {
 };
 
 // ============================================================================
-// clampBbox: 将 (ymin, xmin, ymax, xmax) 坐标 clamp 到 [0, 1000] 范围
-// 防止越界坐标导致误触或渲染异常
+// clampBbox: clamp (ymin, xmin, ymax, xmax) into the [0, 1000] range
+// Prevent out-of-bounds coordinates from causing bad taps or rendering issues
 // ============================================================================
 export function clampBbox(
   bbox: [number, number, number, number],

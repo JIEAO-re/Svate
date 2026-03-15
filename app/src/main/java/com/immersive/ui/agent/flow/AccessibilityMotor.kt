@@ -25,18 +25,18 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
- * P1 响应式重构：执行器流水线
+ * P1 reactive refactor: executor pipeline.
  *
- * 职责：
- * - 接收经过安全守卫验证的动作
- * - 执行底层 AccessibilityService 操作
- * - 支持 Spatial Grounding 坐标驱动执行
- * - 发射执行结果供验证
+ * Responsibilities:
+ * - Receive actions that already passed the safety guard
+ * - Execute low-level AccessibilityService operations
+ * - Support coordinate-driven execution through Spatial Grounding
+ * - Emit execution results for verification
  *
- * 执行优先级：
- * 1. Spatial Grounding 坐标（纯视觉盲打）
- * 2. SoM ID 解析
- * 3. Selector 匹配
+ * Execution priority:
+ * 1. Spatial Grounding coordinates (pure visual targeting)
+ * 2. SoM ID resolution
+ * 3. Selector matching
  * 4. Legacy Bbox
  */
 class AccessibilityMotor(
@@ -53,7 +53,7 @@ class AccessibilityMotor(
         )
     }
 
-    // ========== 输出流 ==========
+    // ========== Output stream ==========
     private val _executionResults = MutableSharedFlow<ExecutionResult>(
         replay = 0,
         extraBufferCapacity = 8,
@@ -64,7 +64,7 @@ class AccessibilityMotor(
     private val _state = MutableStateFlow(MotorState.IDLE)
     val state: StateFlow<MotorState> = _state.asStateFlow()
 
-    // ========== 内部状态 ==========
+    // ========== Internal state ==========
     private var launchablePackages: Set<String> = emptySet()
 
     fun setLaunchablePackages(packages: Set<String>) {
@@ -72,7 +72,7 @@ class AccessibilityMotor(
     }
 
     /**
-     * 执行动作
+     * Execute an action.
      */
     suspend fun execute(
         action: AgentAction,
@@ -113,14 +113,14 @@ class AccessibilityMotor(
         return result
     }
 
-    // ========== CLICK 执行 ==========
+    // ========== CLICK execution ==========
     private suspend fun executeClick(
         action: AgentAction,
         uiNodes: List<UiNode>,
         somMarkerMap: Map<Int, UiNode>,
         service: AgentAccessibilityService,
     ): ExecutionResult {
-        // 优先级 1: Spatial Grounding 坐标
+        // Priority 1: Spatial Grounding coordinates
         val spatialCoords = action.spatialCoordinates
         if (spatialCoords != null && spatialCoords.size == 2) {
             Log.d(TAG, "CLICK via Spatial Grounding: [${spatialCoords[0]}, ${spatialCoords[1]}]")
@@ -135,7 +135,7 @@ class AccessibilityMotor(
             )
         }
 
-        // 优先级 2: SoM ID
+        // Priority 2: SoM ID
         val somId = action.targetSomId
         if (somId != null && somId > 0) {
             val node = somMarkerMap[somId] ?: uiNodes.firstOrNull { it.index == somId }
@@ -155,7 +155,7 @@ class AccessibilityMotor(
             }
         }
 
-        // 优先级 3: Selector
+        // Priority 3: Selector
         val selector = action.selector
         if (selector != null) {
             val (screenWidth, screenHeight) = service.getScreenSize()
@@ -177,7 +177,7 @@ class AccessibilityMotor(
             }
         }
 
-        // 优先级 4: Legacy Bbox
+        // Priority 4: legacy bbox
         val bbox = action.targetBbox
         if (bbox != null) {
             val success = awaitCallback { callback ->
@@ -198,7 +198,7 @@ class AccessibilityMotor(
         )
     }
 
-    // ========== TYPE 执行 ==========
+    // ========== TYPE execution ==========
     private suspend fun executeType(
         action: AgentAction,
         uiNodes: List<UiNode>,
@@ -214,7 +214,7 @@ class AccessibilityMotor(
             )
         }
 
-        // 先聚焦输入框
+        // Focus the input field first.
         val spatialCoords = action.spatialCoordinates
         if (spatialCoords != null && spatialCoords.size == 2) {
             val focusSuccess = awaitCallback { callback ->
@@ -251,7 +251,7 @@ class AccessibilityMotor(
             }
         }
 
-        // 输入文本
+        // Input the text.
         val inputSuccess = service.performInput(text)
         return ExecutionResult(
             success = inputSuccess,
@@ -260,7 +260,7 @@ class AccessibilityMotor(
         )
     }
 
-    // ========== 其他执行方法 ==========
+    // ========== Other execution methods ==========
     private suspend fun executeSubmitInput(service: AgentAccessibilityService): ExecutionResult {
         val byIme = service.performSubmitInput()
         val success = if (byIme) true else {
@@ -385,7 +385,7 @@ class AccessibilityMotor(
         return ExecutionResult(success = true, action = action)
     }
 
-    // ========== 工具方法 ==========
+    // ========== Helper methods ==========
     private suspend fun awaitCallback(
         register: ((Boolean) -> Unit) -> Unit,
     ): Boolean {
@@ -409,7 +409,7 @@ class AccessibilityMotor(
     }
 }
 
-// ========== 数据类 ==========
+// ========== Data classes ==========
 
 data class MotorConfig(
     val actionTimeoutMs: Long = 3_000L,

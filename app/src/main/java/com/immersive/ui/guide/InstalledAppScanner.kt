@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 
 /**
- * 已安装应用的精简信息
+ * Simplified metadata for an installed app.
  */
 data class AppInfo(
     val appName: String,
@@ -12,13 +12,13 @@ data class AppInfo(
 )
 
 /**
- * 扫描设备上所有用户可见（有 Launcher 图标）的已安装应用。
- * 仅通过 Launcher 可见性查询，不依赖 QUERY_ALL_PACKAGES。
+ * Scan all user-visible installed apps that expose a launcher icon.
+ * Uses launcher visibility queries only and does not rely on QUERY_ALL_PACKAGES.
  */
 object InstalledAppScanner {
 
     /**
-     * 获取所有拥有 Launcher 入口的已安装应用列表（去除自身）。
+     * Return all installed apps with launcher entry points, excluding this app itself.
      */
     fun getInstalledApps(context: Context): List<AppInfo> {
         val pm = context.packageManager
@@ -43,30 +43,30 @@ object InstalledAppScanner {
     }
 
     /**
-     * 将应用列表格式化为适合注入 Gemini Prompt 的简洁文本。
-     * 格式示例：微信(com.tencent.mm), 支付宝(com.eg.android.AlipayGphone), ...
+     * Format the app list as concise text suitable for Gemini prompt injection.
+     * Example format: WeChat(com.tencent.mm), Alipay(com.eg.android.AlipayGphone), ...
      */
     fun formatForPrompt(apps: List<AppInfo>): String {
         return apps.joinToString(", ") { "${it.appName}(${it.packageName})" }
     }
 
     /**
-     * 本地模糊匹配：根据用户输入文本，从已安装应用中筛选名称包含关键词的候选应用。
+     * Fuzzy-match installed apps locally by filtering app names against the user's query text.
      */
     fun fuzzyMatch(query: String, apps: List<AppInfo>, maxResults: Int = 5): List<AppInfo> {
         if (query.isBlank()) return emptyList()
 
         val queryLower = query.lowercase()
 
-        // 优先级 1：应用名完全包含查询词
+        // Priority 1: app name fully contains the query text.
         val exactContains = apps.filter { it.appName.lowercase().contains(queryLower) }
         if (exactContains.isNotEmpty()) return exactContains.take(maxResults)
 
-        // 优先级 2：查询词中包含应用名（如用户说"打开微信"，匹配到"微信"）
+        // Priority 2: the query contains the app name, such as "open WeChat" matching "WeChat".
         val reverseContains = apps.filter { queryLower.contains(it.appName.lowercase()) }
         if (reverseContains.isNotEmpty()) return reverseContains.take(maxResults)
 
-        // 优先级 3：逐字匹配（查询词的任意单字出现在应用名中）
+        // Priority 3: character-level matching when any query character appears in the app name.
         val charMatch = apps
             .map { app ->
                 val matchScore = queryLower.count { ch -> app.appName.lowercase().contains(ch) }

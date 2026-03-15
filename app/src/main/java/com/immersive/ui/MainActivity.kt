@@ -185,12 +185,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var isTtsEnabled by mutableStateOf(false) // 默认静音
     private var isTtsReady by mutableStateOf(false)
 
-    // Agent 代理模式 — 状态已迁移至 MainViewModel，此处保留模式开关
+    // Agent autonomous mode: state moved to MainViewModel, local toggle kept here.
     private var isAgentMode by mutableStateOf(true) // 默认代理模式
     private var pendingPlan: GoalChatResult? = null
     private var pendingSpeechText: String? = null
 
-    // 瀵硅瘽浼氳瘽绠＄悊
+    // Conversation session management
     private var chatSessions = mutableStateListOf<ChatSession>()
     private var currentSessionId by mutableStateOf("")
     private var showEditTitleDialog by mutableStateOf(false)
@@ -208,7 +208,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
     private var textToSpeech: TextToSpeech? = null
 
-    /** ViewModel（Room、errorFlow 中心） */
+    /** ViewModel (Room and errorFlow hub). */
     private val mainViewModel: MainViewModel by lazy {
         androidx.lifecycle.ViewModelProvider(this)[MainViewModel::class.java]
     }
@@ -219,7 +219,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         textToSpeech = TextToSpeech(this, this)
         mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
 
-        // 扫描已安装应用列表并注入 AI 引擎
+        // Scan installed apps and inject them into the AI engine.
         val apps = InstalledAppScanner.getInstalledApps(this)
         GuideAiEngines.setInstalledApps(apps)
 
@@ -272,12 +272,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-        // 加载历史对话
+        // Load stored conversation history.
         chatSessions.addAll(ChatStorage.loadSessions(this))
         if (chatSessions.isEmpty()) {
             startNewSession()
         } else {
-            // 恢复最近会话
+            // Restore the most recent session.
             switchSession(chatSessions.first().id)
         }
 
@@ -291,7 +291,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                 val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
-                // 监听错误事件并显示 Snackbar
+                // Listen for error events and surface them with a Snackbar.
                 LaunchedEffect(viewModel) {
                     viewModel.errorFlow.collect { msg ->
                         snackbarHostState.showSnackbar(msg)
@@ -426,7 +426,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         title = { Text("设置") },
                         text = {
                             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                                // 模式切换
+                                // Mode toggle
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -471,7 +471,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                     }
                                 }
 
-                                // 语音输入
+                                // Voice input
                                 Row(
                                         modifier = Modifier
                                         .fillMaxWidth()
@@ -505,7 +505,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
                                 Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFEAECF0)))
 
-                                // 关于 Svate
+                                // About Svate
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -525,7 +525,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     )
                 }
 
-                // 二次确认清除对话框
+                // Secondary confirmation dialog before clearing data.
                 if (showClearConfirm) {
                     AlertDialog(
                         onDismissRequest = { showClearConfirm = false },
@@ -551,7 +551,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         saveCurrentSession()
-        // Agent 生命周期已由 ViewModel 管理，无需在此 stop
+        // The ViewModel owns the agent lifecycle, so no stop call is needed here.
         ioExecutor.shutdownNow()
         textToSpeech?.stop()
         textToSpeech?.shutdown()
@@ -638,7 +638,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 用户从候选列表中选择一个应用后，自动发送确认消息。
+     * Automatically send a confirmation message after the user selects a candidate app.
      */
     private fun selectCandidate(candidate: AppCandidate) {
         candidateApps.clear()
@@ -680,7 +680,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             return
         }
 
-        // Agent 模式需要检查无障碍服务
+        // Agent mode requires the accessibility service to be enabled.
         if (isAgentMode && !AgentAccessibilityService.isServiceEnabled(this)) {
             Toast.makeText(this, "Autonomous mode requires accessibility service. Opening settings...", Toast.LENGTH_LONG).show()
             AgentAccessibilityService.openAccessibilitySettings(this)
@@ -701,7 +701,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 启动 Agent 自主模式 — 委托给 ViewModel（跨配置变更存活）
+     * Start autonomous agent mode by delegating to the ViewModel, which survives config changes.
      */
     private fun startAgent(plan: GoalChatResult) {
         mainViewModel.startAgent(plan)
@@ -783,7 +783,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun createId(): String = "${System.currentTimeMillis()}_${(1000..9999).random()}"
 
     // ================================================================
-    // 瀵硅瘽浼氳瘽绠＄悊
+    // Conversation session management
     // ================================================================
 
     private fun startNewSession() {
@@ -833,11 +833,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 首次用户对话后自动生成标题
+     * Automatically generate a title after the first user turn.
      */
     private fun autoGenerateTitleIfNeeded() {
         val session = chatSessions.find { it.id == currentSessionId } ?: return
-        // 仅在自动标题模式且至少有一轮用户对话时生成
+        // Only generate a title in auto-title mode after at least one user turn.
         val userMsgCount = messages.count { it.role == "user" }
         if (!session.isAutoTitle || userMsgCount != 1) return
 
@@ -864,7 +864,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         session.title = title.trim().ifBlank { "New Chat" }
         session.isAutoTitle = false
         ChatStorage.saveSessions(this, chatSessions.toList())
-        // 瑙﹀彂 recompose
+        // Trigger recompose
         val idx = chatSessions.indexOf(session)
         if (idx >= 0) {
             chatSessions[idx] = session.copy()
@@ -891,7 +891,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         session.messages.addAll(messages.map { ChatMsg(it.role, it.content) })
 
         ioExecutor.execute {
-            // 1. 生成总结
+            // 1. Generate a summary
             val summary = ChatStorage.generateSummary(session.messages)
             if (summary.isNotBlank()) {
                 session.summary = summary
@@ -902,14 +902,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 session.title = title
             }
 
-            // 3. 提取用户偏好
+            // 3. Extract user preferences
             UserProfileStore.extractAndMerge(this@MainActivity, session.messages)
 
-            // 4. 保存
+            // 4. Save
             ChatStorage.saveSessions(this@MainActivity, chatSessions.toList())
 
             runOnUiThread {
-                // 触发 recompose
+                // Trigger recompose
                 val idx = chatSessions.indexOf(session)
                 if (idx >= 0) {
                     chatSessions[idx] = session.copy()
@@ -965,7 +965,7 @@ private fun GuideScreen(
             .fillMaxSize()
             .background(Color.Transparent),
     ) {
-        // ===== 顶栏 =====
+        // ===== Top bar =====
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1009,7 +1009,7 @@ private fun GuideScreen(
 
             Spacer(modifier = Modifier.width(6.dp))
 
-            // 停止按钮（仅运行中显示）
+            // Stop button (shown only while running)
             if (isGuideRunning) {
                 TextButton(
                     onClick = onStopGuide,
@@ -1032,7 +1032,7 @@ private fun GuideScreen(
                 .background(Color(0xFFEAECF0)),
         )
 
-        // ===== Agent 状态 / 确认提示 =====
+        // ===== Agent status / confirmation prompt =====
         if (isAgentMode && agentPhaseText.isNotBlank()) {
             val isWarning = agentPhaseText.startsWith("⚠️")
             Column(
@@ -1076,7 +1076,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 不确定时方案选择 =====
+        // ===== Option picker for uncertain cases =====
         if (isAgentMode && pendingDecisionRequest != null) {
             Column(
                 modifier = Modifier
@@ -1136,7 +1136,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 聊天区域 =====
+        // ===== Chat area =====
         if (messages.size <= 1) {
             Column(
                 modifier = Modifier
@@ -1241,7 +1241,7 @@ private fun GuideScreen(
                     }
                 }
 
-                // 打字动画
+                // Typing animation
                 if (isTyping) {
                     item(key = "typing_indicator") {
                         Row(
@@ -1265,7 +1265,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 候选应用（简洁列表） =====
+        // ===== Candidate apps (compact list) =====
         if (candidateApps.isNotEmpty()) {
             Column(
                 modifier = Modifier
@@ -1310,7 +1310,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 引导就绪提示 =====
+        // ===== Plan-ready hint =====
         if (readyPlan != null) {
             Column(
                 modifier = Modifier
@@ -1347,7 +1347,7 @@ private fun GuideScreen(
             }
         }
 
-        // ===== 搴曢儴杈撳叆鏍?=====
+        // ===== Bottom input area =====
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1413,7 +1413,7 @@ private fun GuideScreen(
 
 
 /**
- * 侧边栏，带搜索和分页
+ * Sidebar with search and pagination.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1444,7 +1444,7 @@ private fun DrawerContent(
             .background(Color.Transparent)
             .padding(top = 16.dp, start = 12.dp, end = 12.dp, bottom = 12.dp),
     ) {
-        // 鏂板缓瀵硅瘽鎸夐挳
+        // New conversation button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1489,7 +1489,7 @@ private fun DrawerContent(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // 对话列表
+        // Conversation list
         LazyColumn(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -1534,7 +1534,7 @@ private fun DrawerContent(
                 }
             }
 
-            // 分页加载更多
+            // Load more items for pagination
             if (filtered.size > displayCount) {
                 item {
                     Box(
@@ -1560,7 +1560,7 @@ private fun DrawerContent(
 }
 
 /**
- * 打字动画，三个灰点循环跳动
+ * Typing animation with three looping gray dots.
  */
 @Composable
 private fun TypingDots() {
@@ -1587,14 +1587,14 @@ private fun TypingDots() {
 }
 
 /**
- * 简易 Markdown 到 AnnotatedString 解析
- * 支持：**加粗**、`行内代码`、以及 `-`/`•` 列表
+ * Simple Markdown-to-AnnotatedString parser.
+ * Supports **bold**, `inline code`, and `-`/`•` lists.
  */
 @Composable
 private fun buildMarkdownAnnotatedString(text: String) = buildAnnotatedString {
     val lines = text.split("\n")
     lines.forEachIndexed { lineIdx, line ->
-        // 列表前缀
+        // List prefix
         val (prefix, rest) = if (line.trimStart().startsWith("- ") || line.trimStart().startsWith("•")) {
             "  • " to line.trimStart().removePrefix("- ").removePrefix("•")
         } else {
@@ -1602,7 +1602,7 @@ private fun buildMarkdownAnnotatedString(text: String) = buildAnnotatedString {
         }
         if (prefix.isNotEmpty()) append(prefix)
 
-        // 解析行内 **加粗** 和 `代码`
+        // Parse inline **bold** and `code`
         val pattern = Regex("""(\*\*(.+?)\*\*)|(`(.+?)`)""")
         var lastEnd = 0
         pattern.findAll(rest).forEach { match ->
@@ -1625,5 +1625,4 @@ private fun buildMarkdownAnnotatedString(text: String) = buildAnnotatedString {
         if (lineIdx < lines.lastIndex) append("\n")
     }
 }
-
 

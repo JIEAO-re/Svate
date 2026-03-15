@@ -14,8 +14,8 @@ import android.widget.FrameLayout
 import android.widget.TextView
 
 /**
- * 代理模式悬浮窗 —— 可拖拽的红色"停止"按钮
- * 点击后通过 SharedFlow 事件总线通知 MainActivity 停止 Agent。
+ * Floating overlay for agent mode with a draggable red "Stop" button.
+ * Tapping it notifies MainActivity through the SharedFlow event bus to stop the agent.
  */
 class AgentStopOverlayService : Service() {
 
@@ -51,7 +51,7 @@ class AgentStopOverlayService : Service() {
     private fun buildOverlay() {
         val wm = windowManager ?: return
 
-        // 红色圆形按钮
+        // Red circular button
         val button = TextView(this).apply {
             text = "✕ 停止"
             textSize = 13f
@@ -76,7 +76,7 @@ class AgentStopOverlayService : Service() {
             y = 200
         }
 
-        // 拖拽移动
+        // Drag handling
         var initialX = 0; var initialY = 0
         var touchX = 0f; var touchY = 0f
         frame.setOnTouchListener { _, event ->
@@ -93,7 +93,7 @@ class AgentStopOverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    // 若移动距离很小，视为点击
+                    // Treat very small movement as a click.
                     val dx = event.rawX - touchX; val dy = event.rawY - touchY
                     if (dx * dx + dy * dy < 100) {
                         AgentEventBus.requestStop()

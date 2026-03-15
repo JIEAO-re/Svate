@@ -25,17 +25,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * P1 响应式重构：通信层流水线
+ * P1 reactive refactor: communication pipeline.
  *
- * 职责：
- * - 维持与云端的网络连接
- * - 接收 PerceptionSnapshot，发送推流请求
- * - 接收云端返回的 AgentAction
- * - 处理网络重试与降级
+ * Responsibilities:
+ * - Maintain the network connection to the cloud
+ * - Receive PerceptionSnapshot objects and send streaming requests
+ * - Receive AgentAction results from the cloud
+ * - Handle network retries and degradation
  *
- * 未来演进：
- * - 升级为 WebSocket/gRPC 双向流
- * - 对接 Gemini Multimodal Live API
+ * Future evolution:
+ * - Upgrade to bidirectional WebSocket or gRPC streaming
+ * - Integrate with the Gemini Multimodal Live API
  */
 class LiveDecisionChannel(
     private val scope: CoroutineScope,
@@ -46,7 +46,7 @@ class LiveDecisionChannel(
         private const val TAG = "LiveDecisionChannel"
     }
 
-    // ========== 输出流 ==========
+    // ========== Output stream ==========
     private val _decisions = MutableSharedFlow<DecisionResult>(
         replay = 0,
         extraBufferCapacity = 4,
@@ -64,7 +64,7 @@ class LiveDecisionChannel(
     private val _state = MutableStateFlow(ChannelState.DISCONNECTED)
     val state: StateFlow<ChannelState> = _state.asStateFlow()
 
-    // ========== 内部状态 ==========
+    // ========== Internal state ==========
     private val requestMutex = Mutex()
     private var channelJob: Job? = null
     private var consecutiveFailures = 0
@@ -72,7 +72,7 @@ class LiveDecisionChannel(
     fun start() {
         _state.value = ChannelState.CONNECTING
         channelJob = scope.launch(Dispatchers.IO) {
-            // 模拟连接建立
+            // Simulate connection establishment.
             delay(100)
             _state.value = ChannelState.CONNECTED
             Log.d(TAG, "Decision channel connected")
@@ -87,9 +87,9 @@ class LiveDecisionChannel(
     }
 
     /**
-     * 发送感知快照，获取决策结果
+     * Send a perception snapshot and receive the decision result.
      *
-     * @param gcsUri P2 媒体异步化：GCS 预签名 URL 上传后的 gs:// URI
+     * @param gcsUri P2 media async path: the gs:// URI returned after signed-URL upload to GCS.
      */
     suspend fun requestDecision(
         ctx: AgentContext,
@@ -124,7 +124,7 @@ class LiveDecisionChannel(
                         prunedCount = snapshot.prunedNodeCount,
                     ),
                     frameFingerprint = snapshot.fingerprint,
-                    // 服务端 schema 对齐：传递 UI 树 XML 文本
+                    // Server schema alignment: pass the UI tree as XML text.
                     uiTreeXml = snapshot.uiTreeText,
                 )
 
@@ -164,7 +164,7 @@ class LiveDecisionChannel(
     }
 
     /**
-     * 重置连接状态（用于从降级状态恢复）
+     * Reset the connection state, typically when recovering from degradation.
      */
     fun resetConnection() {
         consecutiveFailures = 0
@@ -172,7 +172,7 @@ class LiveDecisionChannel(
     }
 }
 
-// ========== 数据类 ==========
+// ========== Data classes ==========
 
 data class DecisionChannelConfig(
     val maxConsecutiveFailures: Int = 3,

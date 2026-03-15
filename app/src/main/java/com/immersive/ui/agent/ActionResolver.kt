@@ -10,49 +10,49 @@ data class ActionResolveResult(
 )
 
 // ============================================================================
-// P1 新增：Spatial Grounding 坐标解析结果
+// P1 addition: Spatial Grounding coordinate resolution result
 // ============================================================================
 /**
- * Spatial Grounding 解析结果，用于纯视觉盲打模式。
+ * Spatial Grounding result for pure visual interaction mode.
  *
- * 当 Gemini 返回 spatial_coordinates 时，无需依赖 UI 树，
- * 直接将归一化坐标转换为绝对像素坐标执行。
+ * When Gemini returns spatial_coordinates, the action can bypass the UI tree
+ * and execute directly from normalized coordinates converted to absolute pixels.
  */
 data class SpatialResolveResult(
-    /** 归一化 X 坐标 [0.0, 1.0] */
+    /** Normalized X coordinate in [0.0, 1.0]. */
     val normalizedX: Float,
-    /** 归一化 Y 坐标 [0.0, 1.0] */
+    /** Normalized Y coordinate in [0.0, 1.0]. */
     val normalizedY: Float,
-    /** 绝对像素 X 坐标 */
+    /** Absolute pixel X coordinate. */
     val absoluteX: Float,
-    /** 绝对像素 Y 坐标 */
+    /** Absolute pixel Y coordinate. */
     val absoluteY: Float,
 )
 
 /**
- * 动作定位方式枚举，按优先级排序。
+ * Action targeting strategies, ordered by priority.
  */
 enum class TargetingMethod {
-    /** P1 首选：Gemini Spatial Grounding 纯视觉坐标 */
+    /** P1 preferred path: Gemini Spatial Grounding visual coordinates. */
     SPATIAL_COORDINATES,
-    /** SoM 标注 ID */
+    /** SoM marker ID. */
     SOM_ID,
-    /** UI 树选择器 */
+    /** UI tree selector. */
     SELECTOR,
-    /** 旧版 Bbox（已废弃，仅兼容） */
+    /** Legacy bbox path (deprecated, compatibility only). */
     LEGACY_BBOX,
 }
 
 // ============================================================================
-// clampBbox: 将 (ymin, xmin, ymax, xmax) 坐标 clamp 到 [0, 1000] 范围
-// 防止越界坐标导致误触或渲染异常
+// clampBbox: clamp (ymin, xmin, ymax, xmax) into the [0, 1000] range.
+// This prevents out-of-bounds coordinates from causing bad taps or render issues.
 // ============================================================================
 /**
- * Clamp bbox 坐标到 [0, 1000] 范围，格式 (ymin, xmin, ymax, xmax)。
- * 同时确保 min <= max。
+ * Clamp bbox coordinates into the [0, 1000] range with the (ymin, xmin, ymax, xmax) format.
+ * Also guarantees min <= max.
  *
- * @param bbox 原始 bbox 数组，长度必须为 4
- * @return clamped 后的 IntArray，或 null（输入无效时）
+ * @param bbox Raw bbox array, which must have length 4.
+ * @return The clamped IntArray, or null when the input is invalid.
  */
 fun clampBbox(bbox: IntArray?): IntArray? {
     if (bbox == null || bbox.size != 4) return null
@@ -77,18 +77,18 @@ object ActionResolver {
     private const val BOUNDS_IOU_THRESHOLD = 0.4f
     const val RESOLVE_THRESHOLD = 5
 
-    // ========== P1 新增：Spatial Grounding 坐标解析 ==========
+    // ========== P1 addition: Spatial Grounding coordinate parsing ==========
     /**
-     * 解析 Spatial Grounding 归一化坐标为绝对像素坐标。
+     * Parse normalized Spatial Grounding coordinates into absolute pixel coordinates.
      *
-     * 这是 P1 视觉基座革命的核心解析路径，优先级最高。
-     * 当云端返回 spatial_coordinates 时，直接调用此方法，
-     * 无需依赖 UI 树即可执行盲打。
+     * This is the highest-priority parsing path in the P1 visual foundation update.
+     * When the cloud response includes spatial_coordinates, this method can execute
+     * directly without relying on the UI tree.
      *
-     * @param spatialCoordinates [x, y] 归一化坐标，范围 [0.0, 1.0]
-     * @param screenWidth 屏幕宽度（像素）
-     * @param screenHeight 屏幕高度（像素）
-     * @return SpatialResolveResult 或 null（坐标无效时）
+     * @param spatialCoordinates Normalized [x, y] coordinates in the [0.0, 1.0] range.
+     * @param screenWidth Screen width in pixels.
+     * @param screenHeight Screen height in pixels.
+     * @return A SpatialResolveResult, or null when the coordinates are invalid.
      */
     fun resolveSpatialCoordinates(
         spatialCoordinates: List<Float>,
@@ -109,7 +109,7 @@ object ActionResolver {
     }
 
     /**
-     * 从 FloatArray 解析 Spatial Grounding 坐标。
+     * Parse Spatial Grounding coordinates from a FloatArray.
      */
     fun resolveSpatialCoordinates(
         spatialCoordinates: FloatArray,
@@ -120,9 +120,9 @@ object ActionResolver {
     }
 
     /**
-     * 判断动作命令使用的定位方式（按优先级）。
+     * Determine which targeting strategy an action command uses, ordered by priority.
      *
-     * 优先级：SPATIAL_COORDINATES > SOM_ID > SELECTOR > LEGACY_BBOX
+     * Priority: SPATIAL_COORDINATES > SOM_ID > SELECTOR > LEGACY_BBOX
      */
     fun detectTargetingMethod(
         spatialCoordinates: List<Float>?,
@@ -251,4 +251,3 @@ object ActionResolver {
         return interArea.toFloat() / union
     }
 }
-

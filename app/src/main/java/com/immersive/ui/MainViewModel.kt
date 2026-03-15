@@ -31,18 +31,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * UI 状态和业务逻辑持有者
- * 将对话持久化、错误通知、Agent 生命周期等逻辑从 MainActivity 中隔离。
+ * Holder for UI state and business logic.
+ * Separates conversation persistence, error reporting, and agent lifecycle logic from MainActivity.
  *
- * Agent 状态通过 StateFlow 暴露，Activity 仅 collectAsState() 渲染。
- * viewModelScope 保证 Agent 在配置变更（如旋转屏幕）时不被销毁。
+ * Agent state is exposed through StateFlow and rendered by the Activity via collectAsState().
+ * viewModelScope keeps the agent alive across configuration changes such as rotation.
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.get(application)
     private val ctx: Context get() = getApplication()
 
-    // ── 错误 Snackbar 通道 ──────────────────────────
+    // Error Snackbar channel
     private val _errorFlow = MutableSharedFlow<String>()
     val errorFlow = _errorFlow.asSharedFlow()
 
@@ -50,7 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { _errorFlow.emit(msg) }
     }
 
-    // ── Agent 状态 StateFlows ──────────────────────────
+    // Agent state StateFlows
     private val _isGuideRunning = MutableStateFlow(false)
     val isGuideRunning: StateFlow<Boolean> = _isGuideRunning.asStateFlow()
 
@@ -63,14 +63,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingDecisionRequest = MutableStateFlow<DecisionRequest?>(null)
     val pendingDecisionRequest: StateFlow<DecisionRequest?> = _pendingDecisionRequest.asStateFlow()
 
-    // ── Agent 编排器（ViewModel 持有，跨配置变更存活）──
+    // Agent orchestrator held by the ViewModel to survive configuration changes
     private var agentOrchestrator: OpenClawOrchestrator? = null
     var pendingConfirmCallback: ((Boolean) -> Unit)? = null
         private set
     var pendingDecisionCallback: ((DecisionOption?) -> Unit)? = null
         private set
 
-    // 回调给 Activity 层的事件（不适合 StateFlow 的一次性事件）
+    // Events delivered back to the Activity layer that are not suitable for StateFlow.
     private val _agentMessages = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val agentMessages = _agentMessages.asSharedFlow()
 
@@ -89,13 +89,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 启动 Agent 自主模式（在 viewModelScope 中运行，跨配置变更存活）
-     * 使用 applicationContext 避免 Activity 泄漏。
+     * Start autonomous agent mode inside viewModelScope so it survives configuration changes.
+     * Uses applicationContext to avoid leaking the Activity.
      */
     fun startAgent(plan: GoalChatResult) {
         val appCtx = ctx.applicationContext
 
-        // 清理旧实例
+        // Clear any previous instance
         try { agentOrchestrator?.stop() } catch (_: Exception) {}
         agentOrchestrator = null
         try { GuideCaptureService.stop(appCtx) } catch (_: Exception) {}
@@ -226,9 +226,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         agentOrchestrator = null
     }
 
-    // ── Room 持久化封装 ────────────────────────────
+    // Room persistence helpers
     /**
-     * 从 Room 加载所有会话（带消息列表），兜底读 SharedPreferences
+     * Load all sessions from Room with their messages, falling back to SharedPreferences.
      */
     suspend fun loadSessionsFromDb(): MutableList<ChatSession> = withContext(Dispatchers.IO) {
         try {
@@ -258,7 +258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 保存（upsert）单个会话到 Room
+     * Save a single session into Room with upsert semantics.
      */
     fun saveSessionToDb(session: ChatSession) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -287,7 +287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 删除会话（Room + SharedPreferences 同步）
+     * Delete a session and keep Room plus SharedPreferences in sync.
      */
     fun deleteSessionFromDb(sessionId: String) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -301,7 +301,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 清除所有会话（Room + SharedPreferences）
+     * Clear all sessions from both Room and SharedPreferences.
      */
     fun clearAllData() {
         viewModelScope.launch(Dispatchers.IO) {

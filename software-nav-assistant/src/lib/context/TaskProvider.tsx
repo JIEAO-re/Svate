@@ -6,19 +6,19 @@ import { AgentDecision } from "../schemas/llm-output";
 import type { NextStepRequest, NextStepResponse, ActionCommand } from "../schemas/mobile-agent";
 
 // ============================================================================
-// P0 前端统一契约：强制切换到 /api/mobile-agent/next-step
+// P0 frontend contract unification: force traffic onto /api/mobile-agent/next-step
 // ============================================================================
-// 所有核心调用路径现在基于 Zod 契约的新 API：
-//   - 请求体遵循 NextStepRequestSchema
-//   - 响应体遵循 NextStepResponseSchema
-//   - 支持 SoM 标注、多帧媒体窗口、Spatial Grounding 等新特性
+// All core request paths now use the new API backed by the Zod contract:
+//   - Request payloads follow NextStepRequestSchema
+//   - Responses follow NextStepResponseSchema
+//   - Supports SoM markers, multi-frame media windows, Spatial Grounding, and other new features
 //
-// Demo 模式：
-//   - 仅当用户显式开启时，才调用旧的 /api/analyze-screen（附带 X-Demo-Mode header）
-//   - 默认关闭，所有流量走新端点
+// Demo mode:
+//   - Call the legacy /api/analyze-screen route only when the user explicitly enables it, with X-Demo-Mode header
+//   - Keep it disabled by default so all traffic goes to the new endpoint
 // ============================================================================
 
-// 初始白板状态
+// Initial blank-slate state
 const initialContext: TaskContext = {
   session_id: typeof crypto !== "undefined" ? crypto.randomUUID() : `sess_${Date.now()}`,
   global_goal: "给小明打视频", // Demo 默认主线剧本
@@ -30,7 +30,7 @@ const initialContext: TaskContext = {
   retry_count: 0,
 };
 
-// 后端健康检查 & 连接状态
+// Backend health check and connection state
 export interface BackendStatus {
   connected: boolean;
   modelName: string | null;
@@ -66,7 +66,7 @@ interface TaskContextType {
 
 const TaskStateContext = createContext<TaskContextType | undefined>(undefined);
 
-// 构建符合 NextStepRequestSchema 的请求体
+// Build a request body that conforms to NextStepRequestSchema
 function buildNextStepRequest(
   ctx: TaskContext,
   imageBase64: string,
@@ -104,7 +104,7 @@ function buildNextStepRequest(
   };
 }
 
-// 将 NextStepResponse 转换为旧的 AgentDecision 格式（兼容现有 UI 组件）
+// Convert NextStepResponse into the legacy AgentDecision shape for existing UI components
 function toLegacyIntent(intent: ActionCommand["intent"]): AgentDecision["next_step"]["intent"] {
   switch (intent) {
     case "CLICK":
@@ -175,13 +175,13 @@ export function TaskProvider({ children }: { children: ReactNode }) {
   // Backend status tracking
   const [backendStatus, setBackendStatus] = useState<BackendStatus>(initialBackendStatus);
 
-  // 健康检查：探测后端连接状态、模型名称、鉴权状态
+  // Health check: probe backend connectivity, model name, and authentication status
   const refreshBackendStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/mobile-agent/next-step", {
         method: "OPTIONS",
       });
-      // 即使 OPTIONS 不被支持，能拿到响应就说明后端在线
+      // Even if OPTIONS is unsupported, any response means the backend is reachable
       setBackendStatus({
         connected: res.ok || res.status === 405 || res.status === 204,
         modelName: res.headers.get("X-Model-Name") ?? "gemini-2.5-flash",
@@ -200,13 +200,13 @@ export function TaskProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // 启动时自动检查一次后端状态
+  // Run a backend status check once on startup
   useEffect(() => {
     void refreshBackendStatus();
   }, [refreshBackendStatus]);
 
   // ============================================================================
-  // 核心引擎：调用新的 /api/mobile-agent/next-step 端点
+  // Core engine: call the new /api/mobile-agent/next-step endpoint
   // ============================================================================
   const runAgentTurn = async (image: string, currentCtx: TaskContext) => {
 
@@ -231,12 +231,12 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       if (data.success) {
         const nextStepResponse = data as { success: true } & NextStepResponse;
 
-        // 更新状态
+        // Update UI state
         setLastActionCommand(nextStepResponse.final_action);
         setCurrentDecision(convertToAgentDecision(nextStepResponse));
         setTurnIndex((prev) => prev + 1);
 
-        // 根据 guard 结果更新会话状态
+        // Update session state based on the guard result
         const newState =
           nextStepResponse.guard.risk_level === "HIGH"
             ? SessionState.RISK_PAUSED
@@ -256,7 +256,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
             : null,
         });
 
-        // 更新后端状态（从成功响应中提取模型信息）
+        // Update backend status with model information from the successful response
         setBackendStatus((prev) => ({
           ...prev,
           connected: true,
@@ -270,7 +270,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       console.error("Agent 核心流转失败:", error);
-      // 更新后端状态为断开
+      // Mark the backend as disconnected
       setBackendStatus((prev) => ({
         ...prev,
         connected: false,
@@ -282,7 +282,7 @@ export function TaskProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // 用户点击或上传了新截图，触发新一轮分析
+  // Trigger a new analysis pass after the user clicks or uploads a new screenshot
   const submitNewScreen = async (base64: string) => {
     setLatestImageBase64(base64);
     const updatedCtx = {
@@ -294,10 +294,10 @@ export function TaskProvider({ children }: { children: ReactNode }) {
     await runAgentTurn(base64, updatedCtx);
   };
 
-  // 长辈按下了快捷反馈（看不到/太快了）
+  // Handle quick feedback from the elderly user, such as can't see or too fast
   const triggerUserFeedback = async (feedback: UserFeedback) => {
     if (!latestImageBase64) return;
-    // 带着负面反馈和上一张原图，重新呼叫 AI 纠偏
+    // Reinvoke the AI with the negative feedback and the previous screenshot for recovery
     const updatedCtx = {
       ...context,
       user_feedback: feedback,

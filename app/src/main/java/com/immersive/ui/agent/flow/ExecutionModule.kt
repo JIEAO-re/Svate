@@ -6,12 +6,12 @@ import com.immersive.ui.agent.AgentAction
 import com.immersive.ui.agent.UiNode
 
 /**
- * 执行模块：动作执行
+ * Execution module: action execution.
  *
- * 从 OpenClawOrchestrator 拆分而来，负责：
- * - 将决策后的 AgentAction 交给 AccessibilityMotor 执行
- * - 应用启动
- * - 可启动包名管理
+ * Extracted from OpenClawOrchestrator, responsible for:
+ * - Handing planned AgentAction objects to AccessibilityMotor
+ * - Launching apps
+ * - Managing the set of launchable package names
  */
 class ExecutionModule(
     private val context: Context,
@@ -20,7 +20,7 @@ class ExecutionModule(
     private var launchablePackages: Set<String> = emptySet()
 
     /**
-     * 查询系统中所有可启动的应用包名
+     * Query all launchable app package names from the system.
      */
     fun queryLaunchablePackages(): Set<String> {
         val pm = context.packageManager
@@ -35,9 +35,9 @@ class ExecutionModule(
     fun getLaunchablePackages(): Set<String> = launchablePackages
 
     /**
-     * 尝试直接打开目标应用
+     * Try to open the target app directly.
      *
-     * @return 成功打开的包名，失败返回 null
+     * @return The launched package name on success, or null on failure.
      */
     fun tryDirectOpenApp(targetAppName: String): String? {
         if (targetAppName.isBlank()) return null
@@ -49,7 +49,7 @@ class ExecutionModule(
     }
 
     /**
-     * 执行动作
+     * Execute an action.
      */
     suspend fun execute(
         action: AgentAction,

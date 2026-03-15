@@ -25,14 +25,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * P2 多模态流范式跃迁：流式推流客户端（HTTP 长轮询实现）
+ * P2 multimodal streaming transition: streaming client implemented with HTTP long polling.
  *
- * 架构设计：
- * - 为 Gemini Multimodal Live API 做铺垫
- * - 当前使用 HTTP 长轮询模拟双向流
- * - 未来升级为 WebSocket/WebRTC
+ * Architecture:
+ * - Prepare the stack for the Gemini Multimodal Live API
+ * - Simulate bidirectional streaming with HTTP long polling for now
+ * - Upgrade to WebSocket or WebRTC later
  *
- * 协议设计（JSON-RPC 风格）：
+ * Protocol design (JSON-RPC style):
  * Client -> Server:
  *   POST /stream/frame { "session_id": "...", "frame": { ... } }
  *   GET /stream/poll?session_id=...
@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *   { "type": "action", "action": { "intent": "CLICK", ... } }
  *   { "type": "error", "message": "..." }
  *
- * TODO P2: 升级为 WebSocket 实现（需要添加 OkHttp 或 Java-WebSocket 依赖）
+ * TODO P2: upgrade to a WebSocket implementation once OkHttp or Java-WebSocket is added.
  */
 class MultimodalStreamClient(
     private val scope: CoroutineScope,
@@ -51,7 +51,7 @@ class MultimodalStreamClient(
         private const val TAG = "MultimodalStreamClient"
     }
 
-    // ========== 输出流 ==========
+    // ========== Output stream ==========
     private val _actions = MutableSharedFlow<StreamAction>(
         replay = 0,
         extraBufferCapacity = 8,
@@ -69,7 +69,7 @@ class MultimodalStreamClient(
     )
     val errors: SharedFlow<StreamError> = _errors.asSharedFlow()
 
-    // ========== 内部状态 ==========
+    // ========== Internal state ==========
     private var pollingJob: Job? = null
     private var heartbeatJob: Job? = null
 
@@ -79,7 +79,7 @@ class MultimodalStreamClient(
     private var authToken: String? = null
 
     /**
-     * 连接到流式服务（启动长轮询）
+     * Connect to the streaming service and start long polling.
      */
     fun connect(sessionId: String, authToken: String? = null) {
         if (isConnecting.getAndSet(true)) return
@@ -88,7 +88,7 @@ class MultimodalStreamClient(
 
         _connectionState.value = StreamConnectionState.CONNECTING
 
-        // 启动长轮询
+        // Start long polling.
         pollingJob = scope.launch(Dispatchers.IO) {
             try {
                 _connectionState.value = StreamConnectionState.CONNECTED
@@ -119,12 +119,12 @@ class MultimodalStreamClient(
             }
         }
 
-        // 启动心跳
+        // Start the heartbeat loop.
         startHeartbeat()
     }
 
     /**
-     * 断开连接
+     * Disconnect.
      */
     fun disconnect() {
         pollingJob?.cancel()
@@ -137,7 +137,7 @@ class MultimodalStreamClient(
     }
 
     /**
-     * 推送帧数据
+     * Push frame data.
      */
     fun pushFrame(frame: StreamFrame): Boolean {
         if (_connectionState.value != StreamConnectionState.CONNECTED) return false
@@ -153,7 +153,7 @@ class MultimodalStreamClient(
     }
 
     /**
-     * 发送用户确认结果
+     * Send the user's confirmation result.
      */
     fun sendConfirmation(actionId: String, confirmed: Boolean): Boolean {
         if (_connectionState.value != StreamConnectionState.CONNECTED) return false
@@ -332,7 +332,7 @@ class MultimodalStreamClient(
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive && _connectionState.value == StreamConnectionState.CONNECTED) {
                 delay(config.heartbeatIntervalMs)
-                // 心跳通过轮询隐式实现
+                // Heartbeats are implicitly handled by polling.
             }
         }
     }
@@ -356,7 +356,7 @@ class MultimodalStreamClient(
     }
 }
 
-// ========== 数据类 ==========
+// ========== Data classes ==========
 
 data class StreamClientConfig(
     val httpEndpoint: String = "https://stave-api.example.com/api",

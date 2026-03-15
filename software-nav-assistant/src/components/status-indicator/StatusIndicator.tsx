@@ -69,12 +69,12 @@ export function StatusIndicator() {
 }
 
 /**
- * 当 demo 关闭且用户尝试使用旧功能时，显示可操作的提示
+ * Show an actionable hint when demo mode is off and the user tries to use the legacy flow.
  */
 export function DemoModeWarningBanner() {
   const { demoMode, setDemoMode, backendStatus } = useTaskContext();
 
-  // 仅在非 demo 模式且后端离线时显示
+  // Show only when demo mode is off and the backend is offline
   if (demoMode || backendStatus.connected) return null;
 
   return (
