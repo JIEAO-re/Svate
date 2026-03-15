@@ -18,3 +18,10 @@ local.properties
 .env
 .env.*
 .env.local
+
+# local tooling and network profiles
+.idea/vcs.xml
+Caddyfile.subscription
+LX专用Tokyo.yaml
+LX专用Tokyo.yaml.bak.*
+sing-box.server.json
