@@ -1,6 +1,6 @@
 # Svate
 
-Svate is a mobile task assistant for Android.
+Svate is an Android Claw: a mobile task assistant for Android that can observe the UI, capture the screen, and execute actions on-device.
 
 It combines:
 
