@@ -22,8 +22,11 @@ object UiNodePruner {
             return Result(emptyList(), rawCount = 0, prunedCount = 0)
         }
 
+        // Use Rect field arithmetic instead of width()/height(): Rect methods
+        // are not available in JVM unit tests, fields are.
         val filtered = nodes.filter { node ->
-            val hasBounds = node.bounds.width() > 0 && node.bounds.height() > 0
+            val hasBounds = (node.bounds.right - node.bounds.left) > 0 &&
+                (node.bounds.bottom - node.bounds.top) > 0
             val meaningful = node.isClickable ||
                 node.isEditable ||
                 node.isScrollable ||
@@ -38,7 +41,9 @@ object UiNodePruner {
         val ranked = filtered.sortedWith(
             compareByDescending<UiNode> { it.isClickable || it.isEditable }
                 .thenByDescending { it.text.isNotBlank() || it.contentDesc.isNotBlank() }
-                .thenByDescending { it.bounds.width() * it.bounds.height() },
+                .thenByDescending {
+                    (it.bounds.right - it.bounds.left) * (it.bounds.bottom - it.bounds.top)
+                },
         )
         val selected = ranked.take(maxNodes)
         return Result(

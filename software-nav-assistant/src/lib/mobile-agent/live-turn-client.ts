@@ -1,7 +1,7 @@
 import { getGenAIClient, resolveModelWithFallback } from "@/lib/mobile-agent/genai-client";
 import { PLANNER_MODEL, FRAME_WINDOW_SIZE, FRAME_DEDUP_ENABLED } from "@/lib/mobile-agent/env";
 import { buildPlannerPrompt } from "@/lib/mobile-agent/prompts";
-import { buildFrameParts } from "@/lib/mobile-agent/frame-content";
+import { applySomAnnotatedFrame, buildFrameParts } from "@/lib/mobile-agent/frame-content";
 import { createHash } from "crypto";
 import {
   NextStepRequest,
@@ -191,8 +191,13 @@ export async function runLivePlannerTurn(
     "gemini-2.5-flash",
   ]);
 
-  // Build contents by appending frame parts first and the text prompt last
-  const frameParts = buildFrameParts(frameWindow);
+  // Build contents by appending frame parts first and the text prompt last.
+  // When the observation carries a SoM-annotated screenshot, it replaces the
+  // latest frame for the planner (numbered marker boxes let the model ground
+  // target_som_id visually); the reviewer keeps consuming the raw frame.
+  const frameParts = buildFrameParts(
+    applySomAnnotatedFrame(frameWindow, request.observation.som_annotated_image_base64),
+  );
   const contents: Part[] = [...frameParts, { text: prompt }];
 
   let lastError: unknown;

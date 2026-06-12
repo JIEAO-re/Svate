@@ -117,4 +117,57 @@ describe("live-turn-client frame dedup", () => {
     expect(result.usedLive).toBe(true);
     expect(generateContent.mock.calls.length).toBe(callsBefore + 1);
   });
+
+  // ==========================================================================
+  // SoM annotated frame substitution: when the observation carries a
+  // som_annotated_image_base64, the planner must see it in place of the
+  // latest raw frame (replacement, not append).
+  // ==========================================================================
+  function makeTwoFrameRequest(
+    sessionId: string,
+    somAnnotatedImageBase64?: string,
+  ): NextStepRequest {
+    const request = makeRequest(sessionId);
+    const mediaWindow = request.observation.media_window;
+    if (!mediaWindow) throw new Error("test fixture requires media_window");
+    mediaWindow.frames = [
+      { frame_id: "f1", ts_ms: 1000, image_base64: "ZnJhbWUx", ui_signature: "sig_f1" },
+      { frame_id: "f2", ts_ms: 2000, image_base64: "ZnJhbWUy", ui_signature: "sig_f2" },
+    ];
+    if (somAnnotatedImageBase64 !== undefined) {
+      request.observation.som_annotated_image_base64 = somAnnotatedImageBase64;
+    }
+    return request;
+  }
+
+  it("replaces the latest frame with the SoM annotated image when present", async () => {
+    const { runLivePlannerTurn } = await import("@/lib/mobile-agent/live-turn-client");
+    const request = makeTwoFrameRequest("sess_som_annotated", "c29tX2Fubm90YXRlZA==");
+
+    const result = await runLivePlannerTurn(request);
+
+    expect(result.usedLive).toBe(true);
+    const contents = generateContent.mock.calls[0][0].contents;
+    // Two frame parts followed by the text prompt.
+    expect(contents).toHaveLength(3);
+    // Earlier frame is untouched; only the latest one carries the annotation.
+    expect(contents[0].inlineData.data).toBe("ZnJhbWUx");
+    expect(contents[1].inlineData.data).toBe("c29tX2Fubm90YXRlZA==");
+    // The prompt mentions the SoM markers so the model returns target_som_id.
+    expect(contents[2].text).toContain("SoM markers");
+  });
+
+  it("keeps the raw latest frame when no SoM annotated image is present", async () => {
+    const { runLivePlannerTurn } = await import("@/lib/mobile-agent/live-turn-client");
+    const request = makeTwoFrameRequest("sess_som_raw");
+
+    const result = await runLivePlannerTurn(request);
+
+    expect(result.usedLive).toBe(true);
+    const contents = generateContent.mock.calls[0][0].contents;
+    expect(contents).toHaveLength(3);
+    expect(contents[0].inlineData.data).toBe("ZnJhbWUx");
+    expect(contents[1].inlineData.data).toBe("ZnJhbWUy");
+    expect(contents[2].text).not.toContain("SoM markers");
+  });
 });

@@ -57,11 +57,6 @@ android {
         )
         buildConfigField(
             "boolean",
-            "MOBILE_AGENT_ENABLED",
-            localBooleanLiteral("MOBILE_AGENT_ENABLED", true)
-        )
-        buildConfigField(
-            "boolean",
             "MOBILE_AGENT_TELEMETRY_ENABLED",
             localBooleanLiteral("MOBILE_AGENT_TELEMETRY_ENABLED", true)
         )
@@ -70,32 +65,6 @@ android {
             "MOBILE_AGENT_TIMEOUT_MS",
             localIntLiteral("MOBILE_AGENT_TIMEOUT_MS", 12000)
         )
-        buildConfigField(
-            "boolean",
-            "EVENT_DRIVEN",
-            localBooleanLiteral("EVENT_DRIVEN", true)
-        )
-        buildConfigField(
-            "boolean",
-            "SOM_CLOUD",
-            localBooleanLiteral("SOM_CLOUD", true)
-        )
-        buildConfigField(
-            "boolean",
-            "OPEN_INTENT",
-            localBooleanLiteral("OPEN_INTENT", true)
-        )
-        buildConfigField(
-            "boolean",
-            "UI_PRUNE",
-            localBooleanLiteral("UI_PRUNE", true)
-        )
-        buildConfigField(
-            "boolean",
-            "VISUAL_DIFF",
-            localBooleanLiteral("VISUAL_DIFF", true)
-        )
-        buildConfigField("int", "MAX_RETRY_ATTEMPTS", localIntLiteral("MAX_RETRY_ATTEMPTS", 3))
         // Compatibility flag: whether to send the redundant screenshot_base64 field.
         // Disabled by default; enable only for debugging or server-side fallback compatibility.
         buildConfigField(
@@ -115,7 +84,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Shrink, optimize, and obfuscate release builds; debug stays unminified.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

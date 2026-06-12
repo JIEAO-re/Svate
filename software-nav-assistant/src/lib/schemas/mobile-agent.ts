@@ -274,6 +274,16 @@ export const MobileHistoryItemSchema = z.object({
   result: z.string(),
 });
 
+// Client-computed search flow state aggregated over the FULL action history
+// (not just the bounded history_tail window). Successful TYPE / SUBMIT_INPUT
+// steps can scroll out of history_tail on long sessions, which would
+// otherwise permanently block FINISH in SEARCH mode; when present, the
+// arbiter ORs these flags with its own history_tail scan.
+export const SearchFlowSchema = z.object({
+  has_typed: z.boolean(),
+  has_submitted: z.boolean(),
+});
+
 export const NextStepRequestSchema = z.object({
   session_id: z.string().min(1),
   turn_index: z.number().int().min(0),
@@ -282,6 +292,7 @@ export const NextStepRequestSchema = z.object({
   task_spec: MobileTaskSpecSchema,
   observation: MobileObservationSchema,
   history_tail: z.array(MobileHistoryItemSchema),
+  search_flow: SearchFlowSchema.optional(),
   shadow_control_action: ActionCommandSchema.optional(),
 });
 

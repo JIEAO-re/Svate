@@ -10,10 +10,15 @@ object FrameFingerprint {
         imageBytes: ByteArray? = null,
         imageBase64: String = "",
     ): String {
+        // Serialize bounds from Rect fields instead of Rect.toString(): the
+        // explicit format is stable across platforms and keeps this code
+        // runnable in JVM unit tests where Rect methods are not available.
         val uiSig = uiNodes
             .take(40)
             .joinToString("|") { node ->
-                "${node.packageName}#${node.className}#${node.viewIdResourceName}#${node.text}#${node.contentDesc}#${node.bounds}"
+                val b = node.bounds
+                "${node.packageName}#${node.className}#${node.viewIdResourceName}#${node.text}#${node.contentDesc}#" +
+                    "[${b.left},${b.top},${b.right},${b.bottom}]"
             }
         val imageHint = when {
             imageBytes != null && imageBytes.isNotEmpty() -> sampleBytes(imageBytes)

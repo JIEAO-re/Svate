@@ -248,8 +248,10 @@ object PopupRecovery {
         allowSystemUi: Boolean,
     ): Boolean {
         if (!allowSystemUi && isSystemUiNode(node)) return false
-        val width = node.bounds.width()
-        val height = node.bounds.height()
+        // Use Rect field arithmetic instead of width()/height(): Rect methods
+        // are not available in JVM unit tests, fields are.
+        val width = node.bounds.right - node.bounds.left
+        val height = node.bounds.bottom - node.bounds.top
         if (width < 24 || height < 24) return false
         if (width > (screenWidth * 0.6f) || height > (screenHeight * 0.25f)) return false
         return true
@@ -260,8 +262,10 @@ object PopupRecovery {
         screenWidth: Int,
         screenHeight: Int,
     ): Boolean {
-        val width = node.bounds.width()
-        val height = node.bounds.height()
+        // Use Rect field arithmetic instead of width()/height(): Rect methods
+        // are not available in JVM unit tests, fields are.
+        val width = node.bounds.right - node.bounds.left
+        val height = node.bounds.bottom - node.bounds.top
         if (width < 30 || height < 24) return false
         if (width > (screenWidth * 0.7f) || height > (screenHeight * 0.3f)) return false
         return true

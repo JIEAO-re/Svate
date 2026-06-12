@@ -12,6 +12,15 @@ export function buildPlannerPrompt(request: NextStepRequest): string {
     .join("\n");
   const frameCount = request.observation.media_window?.frames.length ?? (request.observation.screenshot_base64 ? 1 : 0);
   const observationSource = request.observation.media_window?.source ?? "SCREENSHOT";
+  // The latest frame is the SoM-annotated screenshot only when the client
+  // uploaded one; tell the model so it grounds targets via marker numbers.
+  const somAnnotationNote = request.observation.som_annotated_image_base64?.trim()
+    ? `
+SoM annotation:
+- The latest frame carries numbered SoM markers (red boxes around interactive elements).
+- When the chosen target has a numbered marker, return that number as target_som_id.
+`
+    : "";
 
   return `
 You are Planner for a mobile AI agent. Generate 1 to 3 candidate actions only.
@@ -27,7 +36,7 @@ Safety:
 - Any payment/password/transfer/authorization/delete action must be HIGH risk.
 - If uncertain, use WAIT.
 - Never output blind bbox-only behavior.
-
+${somAnnotationNote}
 Search hard constraints (mode=SEARCH):
 - Required sequence: OPEN_APP (if needed) -> CLICK search box -> TYPE query -> SUBMIT_INPUT -> OPEN first result.
 - Do not emit FINISH until TYPE and SUBMIT_INPUT are completed and a result page is opened.
@@ -66,8 +75,14 @@ export function buildReviewerPrompt(
   request: NextStepRequest,
   candidates: ActionCommand[],
 ): string {
-  const hasType = request.history_tail.some((item) => item.action_intent === "TYPE");
-  const hasSubmit = request.history_tail.some((item) => item.action_intent === "SUBMIT_INPUT");
+  // OR the client-computed search_flow with the history_tail scan: completed
+  // TYPE / SUBMIT_INPUT steps can scroll out of the bounded tail window.
+  const hasType =
+    request.search_flow?.has_typed === true ||
+    request.history_tail.some((item) => item.action_intent === "TYPE");
+  const hasSubmit =
+    request.search_flow?.has_submitted === true ||
+    request.history_tail.some((item) => item.action_intent === "SUBMIT_INPUT");
   const frameCount = request.observation.media_window?.frames.length ?? (request.observation.screenshot_base64 ? 1 : 0);
   const observationSource = request.observation.media_window?.source ?? "SCREENSHOT";
   const candidateText = candidates

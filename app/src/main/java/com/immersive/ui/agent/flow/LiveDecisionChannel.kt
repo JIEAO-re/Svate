@@ -145,8 +145,6 @@ class LiveDecisionChannel(
                                 prunedCount = snapshot.prunedNodeCount,
                             ),
                             frameFingerprint = snapshot.fingerprint,
-                            // Server schema alignment: pass the UI tree as XML text.
-                            uiTreeXml = snapshot.uiTreeText,
                         )
                     }
                 }

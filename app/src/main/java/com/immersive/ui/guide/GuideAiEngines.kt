@@ -42,16 +42,28 @@ data class ScreenAnalysisResult(
 
 object GuideAiEngines {
     private const val UNKNOWN_APP = "Target App"
+
+    // Mirrors the BFF chat-goal contract: at most 40 messages, each <= 1000 chars.
+    private const val MAX_BFF_MESSAGES = 40
+    private const val MAX_BFF_CONTENT_CHARS = 1000
+
     private var installedApps: List<AppInfo> = emptyList()
 
     fun setInstalledApps(apps: List<AppInfo>) {
         installedApps = apps
     }
 
-    fun chatForGoal(messages: List<SimpleChatMessage>): GoalChatResult {
+    /**
+     * Clarifies the user goal via the BFF, falling back to a generic model prompt.
+     *
+     * @param userProfile Optional formatted user profile (see UserProfileStore.formatForPrompt).
+     *   Callers must only pass it when the profile opt-in toggle is enabled; null keeps the
+     *   request identical to the no-profile behavior.
+     */
+    fun chatForGoal(messages: List<SimpleChatMessage>, userProfile: String? = null): GoalChatResult {
         val fallback = fallbackChat(messages)
         try {
-            val viaBff = requestChatGoalViaBff(messages)
+            val viaBff = requestChatGoalViaBff(messages, userProfile)
             if (viaBff.reply.isNotBlank()) {
                 return viaBff
             }
@@ -68,6 +80,11 @@ object GuideAiEngines {
             }
         val appListText = if (installedApps.isNotEmpty()) {
             "\nInstalled apps:\n${InstalledAppScanner.formatForPrompt(installedApps)}\n"
+        } else {
+            ""
+        }
+        val profileText = if (!userProfile.isNullOrBlank()) {
+            "\nKnown user profile (use it to personalize replies and app suggestions; explicit user requests always take precedence):\n$userProfile\n"
         } else {
             ""
         }
@@ -100,7 +117,7 @@ Rules:
    - RESEARCH: asks for synthesis/multi-source summary/article
    - HOMEWORK: homework/exercise/question solving task
 5) Default research_depth=3, homework_policy=REFERENCE_ONLY, ask_on_uncertain=true.
-$appListText
+$appListText$profileText
 Conversation:
 $conversation
         """.trimIndent()
@@ -409,7 +426,40 @@ Rules:
         return normalized.take(3)
     }
 
-    private fun requestChatGoalViaBff(messages: List<SimpleChatMessage>): GoalChatResult {
+    /**
+     * Builds the message window sent to the BFF, optionally injecting the user profile.
+     *
+     * The BFF chat-goal schema only accepts "user"/"assistant" roles, summarizes the last
+     * 16 messages, and infers the goal from the most recent user message. Inserting the
+     * profile as a user-role context message right before the latest user message keeps it
+     * inside the server's summarization window while guaranteeing it can never be mistaken
+     * for the goal itself.
+     */
+    private fun buildBffMessages(
+        messages: List<SimpleChatMessage>,
+        userProfile: String?,
+    ): List<SimpleChatMessage> {
+        if (userProfile.isNullOrBlank()) return messages.takeLast(MAX_BFF_MESSAGES)
+
+        // Reserve one slot so the total stays within the BFF message limit.
+        val window = messages.takeLast(MAX_BFF_MESSAGES - 1)
+        val lastUserIndex = window.indexOfLast { it.role == "user" }
+        if (lastUserIndex < 0) return window
+
+        val profileMessage = SimpleChatMessage(
+            role = "user",
+            content = (
+                "[User profile context] Known facts about me, use them to personalize " +
+                    "suggestions; my explicit requests always take precedence:\n$userProfile"
+                ).take(MAX_BFF_CONTENT_CHARS),
+        )
+        return window.toMutableList().apply { add(lastUserIndex, profileMessage) }
+    }
+
+    private fun requestChatGoalViaBff(
+        messages: List<SimpleChatMessage>,
+        userProfile: String? = null,
+    ): GoalChatResult {
         val baseUrl = BuildConfig.MOBILE_AGENT_BASE_URL.trimEnd('/')
         val url = URL("$baseUrl/api/chat-goal")
         val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -425,7 +475,7 @@ Rules:
             put(
                 "messages",
                 JSONArray().apply {
-                    messages.takeLast(40).forEach { msg ->
+                    buildBffMessages(messages, userProfile).forEach { msg ->
                         put(
                             JSONObject().apply {
                                 put("role", msg.role)

@@ -103,6 +103,18 @@ function hasIntent(request: NextStepRequest, intent: string): boolean {
   return request.history_tail.some((item) => item.action_intent === intent);
 }
 
+// Search flow state = client-computed search_flow OR history_tail scan.
+// history_tail is a bounded window, so a successful TYPE / SUBMIT_INPUT can
+// scroll out of it on long sessions; without the OR, FINISH would then be
+// permanently blocked in SEARCH mode.
+function hasTypedInSearch(request: NextStepRequest): boolean {
+  return request.search_flow?.has_typed === true || hasIntent(request, "TYPE");
+}
+
+function hasSubmittedInSearch(request: NextStepRequest): boolean {
+  return request.search_flow?.has_submitted === true || hasIntent(request, "SUBMIT_INPUT");
+}
+
 function extractSearchQuery(request: NextStepRequest): string {
   const direct = request.task_spec.search_query.trim();
   if (direct) return direct;
@@ -280,8 +292,8 @@ function buildSearchRecoveryAction(
   request: NextStepRequest,
   reason: string,
 ): ActionCommand | null {
-  const typed = hasIntent(request, "TYPE");
-  const submitted = hasIntent(request, "SUBMIT_INPUT");
+  const typed = hasTypedInSearch(request);
+  const submitted = hasSubmittedInSearch(request);
 
   if (!typed && (
     reason === "search_focus_missing" ||
@@ -379,8 +391,8 @@ function validateSearchAction(
     return validateOpenIntentAction(request, action);
   }
 
-  const typed = hasIntent(request, "TYPE") || action.intent === "TYPE";
-  const submitted = hasIntent(request, "SUBMIT_INPUT") || action.intent === "SUBMIT_INPUT";
+  const typed = hasTypedInSearch(request) || action.intent === "TYPE";
+  const submitted = hasSubmittedInSearch(request) || action.intent === "SUBMIT_INPUT";
 
   if (!typed && action.intent === "FINISH") return "search_type_missing";
   if (!submitted && action.intent === "FINISH") return "search_submit_missing";

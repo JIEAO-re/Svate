@@ -94,7 +94,6 @@ class CloudDecisionClient {
         somMarkers: List<SomMarkerPayload> = emptyList(),
         uiNodeStats: UiNodeStatsPayload? = null,
         frameFingerprint: String? = null,
-        uiTreeXml: String? = null,
         screenDescription: String? = null,
     ): CloudDecisionResult {
         if (frames.isEmpty()) {
@@ -113,7 +112,6 @@ class CloudDecisionClient {
             somMarkers = somMarkers,
             uiNodeStats = uiNodeStats,
             frameFingerprint = frameFingerprint,
-            uiTreeXml = uiTreeXml,
             screenDescription = screenDescription,
         )
         val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -206,7 +204,6 @@ class CloudDecisionClient {
         somMarkers: List<SomMarkerPayload> = emptyList(),
         uiNodeStats: UiNodeStatsPayload? = null,
         frameFingerprint: String? = null,
-        uiTreeXml: String? = null,
         screenDescription: String? = null,
     ): JSONObject {
         val previous = ctx.history.lastOrNull()
@@ -226,6 +223,12 @@ class CloudDecisionClient {
                 )
             }
         }
+        // Search-flow progress computed over the FULL history, not just the
+        // 8-entry history_tail window. The server arbiter prefers this field
+        // when present, so a successful TYPE/SUBMIT_INPUT that has slid out of
+        // history_tail no longer blocks FINISH forever.
+        val hasTyped = ctx.history.any { it.success && it.action.intent == ActionIntent.TYPE }
+        val hasSubmitted = ctx.history.any { it.success && it.action.intent == ActionIntent.SUBMIT_INPUT }
         return JSONObject().apply {
             put("session_id", if (ctx.traceId.isNullOrBlank()) "sess_${System.currentTimeMillis()}" else ctx.traceId)
             put("turn_index", ctx.stepIndex)
@@ -237,6 +240,13 @@ class CloudDecisionClient {
                     put("mode", ctx.taskSpec.mode.name)
                     put("search_query", ctx.taskSpec.searchQuery)
                     put("ask_on_uncertain", ctx.taskSpec.askOnUncertain)
+                },
+            )
+            put(
+                "search_flow",
+                JSONObject().apply {
+                    put("has_typed", hasTyped)
+                    put("has_submitted", hasSubmitted)
                 },
             )
             put(
@@ -270,10 +280,6 @@ class CloudDecisionClient {
                     }
                     if (!frameFingerprint.isNullOrBlank()) {
                         put("frame_fingerprint", frameFingerprint)
-                    }
-                    // Server schema alignment: ui_tree_xml contains the UI tree serialized as XML text.
-                    if (!uiTreeXml.isNullOrBlank()) {
-                        put("ui_tree_xml", uiTreeXml)
                     }
                     // Server schema alignment: screen_description contains the screen summary.
                     if (!screenDescription.isNullOrBlank()) {

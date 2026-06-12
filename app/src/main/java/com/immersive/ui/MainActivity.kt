@@ -630,9 +630,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         messages += UiMessage(createId(), "user", text)
 
         val requestMessages = messages.map { SimpleChatMessage(role = it.role, content = it.content) }
+        // Snapshot the opt-in flag on the UI thread before hopping to the executor.
+        // Profile injection shares the privacy toggle with extraction: when it is off,
+        // the request is byte-identical to the no-profile behavior.
+        val allowProfileContext = isProfileExtractionEnabled
         ioExecutor.execute {
             try {
-                val response = GuideAiEngines.chatForGoal(requestMessages)
+                // formatForPrompt returns null when the stored profile is empty,
+                // so injection only happens when the toggle is on AND data exists.
+                val profileContext = if (allowProfileContext) {
+                    UserProfileStore.formatForPrompt(this@MainActivity)
+                } else {
+                    null
+                }
+                val response = GuideAiEngines.chatForGoal(requestMessages, profileContext)
                 runOnUiThread {
                     messages += UiMessage(createId(), "assistant", response.reply)
                     speakAssistant(response.reply)

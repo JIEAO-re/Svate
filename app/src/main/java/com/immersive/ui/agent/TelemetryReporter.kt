@@ -9,6 +9,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.Executors
 
 class TelemetryReporter(
@@ -29,6 +30,9 @@ class TelemetryReporter(
         worker.execute {
             try {
                 val event = JSONObject().apply {
+                    // Stable per-event id so server-side ON CONFLICT dedup works
+                    // when the same event is re-sent after a network retry.
+                    put("client_event_id", UUID.randomUUID().toString())
                     put("trace_id", traceId.ifBlank { "trace_${System.currentTimeMillis()}" })
                     put("session_id", sessionId)
                     put("turn_index", turnIndex)

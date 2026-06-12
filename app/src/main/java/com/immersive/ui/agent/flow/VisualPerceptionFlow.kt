@@ -11,7 +11,6 @@ import com.immersive.ui.agent.SomMarkerPayload
 import com.immersive.ui.agent.SomRenderer
 import com.immersive.ui.agent.UiNode
 import com.immersive.ui.agent.UiNodePruner
-import com.immersive.ui.agent.UiTreeParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -221,7 +220,6 @@ class VisualPerceptionFlow(
             fingerprint = fingerprint,
             somAnnotatedImageBase64 = somResult?.annotatedImageBase64,
             somMarkers = somMarkers,
-            uiTreeText = UiTreeParser.formatForPrompt(prunedNodes),
             screenWidth = screenWidth,
             screenHeight = screenHeight,
             timestampMs = System.currentTimeMillis(),
@@ -264,7 +262,6 @@ data class PerceptionSnapshot(
     val fingerprint: String,
     val somAnnotatedImageBase64: String?,
     val somMarkers: List<SomMarkerPayload>,
-    val uiTreeText: String,
     val screenWidth: Int,
     val screenHeight: Int,
     val timestampMs: Long,
