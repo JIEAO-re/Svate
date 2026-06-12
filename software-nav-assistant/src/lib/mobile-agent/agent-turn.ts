@@ -69,7 +69,12 @@ function mapContentToGemini(content: AgentContent): Content {
     const mapped = mapPartToGemini(part);
     if (mapped) parts.push(mapped);
   }
-  return { role: content.role, parts };
+  // Gemini's Content.role accepts only "user" and "model". The wire protocol
+  // uses a semantic "function" role for tool-result turns; Gemini expects those
+  // functionResponse parts under role "user". Without this remap every turn
+  // after the first tool call would be rejected as an invalid role.
+  const role = content.role === "function" ? "user" : content.role;
+  return { role, parts };
 }
 
 // ---------------------------------------------------------------------------

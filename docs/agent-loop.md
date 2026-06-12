@@ -165,3 +165,23 @@ app/src/main/java/com/immersive/ui/agent/loop/
 
 The UI exposes a mode toggle (ASK / AUTO) and routes the new "agent loop" mode to
 `AgentLoop`; the existing pipeline mode is unchanged.
+
+## 7. Known gaps (P2, not yet done)
+
+The loop compiles and its pure logic is unit-tested, but it has **not** been
+validated end to end on a real device. Before that happens:
+
+- **MediaProjection is not wired into loop mode.** `AgentCaptureService` needs an
+  active projection (a user consent dialog) to capture frames; loop mode currently
+  skips that flow, so `take_screenshot` and observation images return nothing and
+  the agent runs **UI-tree-only** (`read_ui_tree` still works — nodes carry pixel
+  bounds, so `tap {x,y}` is viable). Wiring the projection consent into loop startup
+  is the first P2 task; until then the system prompt should not promise screenshots.
+- **Streaming narration** is deferred; the proxy returns one response per turn.
+- **Gemini `parametersJsonSchema`** support depends on the installed `@google/genai`
+  version exposing that field (it type-checks today); verify against the live API.
+- **Coordinate/SoM tap screening** resolves the targeted node's text for hard-keyword
+  screening, but a node with no text (icon-only button) cannot be screened by keyword
+  and relies on the injection/IntentGuard floor plus ASK mode.
+- **reviewer** is not consulted in the loop; moving it to an async safety advisor is a
+  later phase.

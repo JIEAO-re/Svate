@@ -315,7 +315,13 @@ class AgentLoop(
      * rejects. Keyword upgrades for tap/type are handled inside the gate.
      */
     private fun buildQuery(tool: PhoneTool, call: TurnToolCall): PermissionQuery {
-        val targetText = extractTargetText(call.args)
+        // For taps, resolve the underlying node text behind a som_id or x/y so the
+        // gate's hard-keyword screening also covers coordinate/index taps, not just
+        // text selectors. Otherwise a "Pay"/"支付" button tapped by id or pixel would
+        // be classified NORMAL and auto-run in AUTO mode.
+        val targetText = listOf(extractTargetText(call.args), resolveTapTargetText(tool, call.args))
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
         val deny = computeDenyFloor(tool, call)
         return PermissionQuery(
             toolName = tool.name,
@@ -358,6 +364,48 @@ class AgentLoop(
             }
         }
         return false
+    }
+
+    /**
+     * For a tap by som_id or x/y, look up the targeted node in the pruned tree and
+     * return its visible text + content description, so hard-keyword screening can
+     * see what a coordinate/index tap actually lands on. Returns "" for non-tap
+     * tools, selector-only taps (already screened by performClickByExactText), or
+     * when no node is found.
+     */
+    private fun resolveTapTargetText(tool: PhoneTool, args: JSONObject): String {
+        if (tool.name != "tap") return ""
+        val service = toolContext.service() ?: return ""
+        val nodes = ToolSupport.readPrunedNodes(service)
+        if (nodes.isEmpty()) return ""
+
+        val node = when {
+            args.has("x") && args.has("y") -> {
+                val x = args.optDouble("x", Double.NaN)
+                val y = args.optDouble("y", Double.NaN)
+                if (x.isNaN() || y.isNaN()) {
+                    null
+                } else {
+                    // Smallest node whose bounds contain the tap point.
+                    nodes
+                        .filter {
+                            x >= it.bounds.left && x <= it.bounds.right &&
+                                y >= it.bounds.top && y <= it.bounds.bottom
+                        }
+                        .minByOrNull {
+                            (it.bounds.right - it.bounds.left).toLong() *
+                                (it.bounds.bottom - it.bounds.top)
+                        }
+                }
+            }
+            args.has("som_id") -> {
+                val somId = args.optInt("som_id", -1)
+                nodes.firstOrNull { it.index == somId }
+            }
+            else -> null
+        } ?: return ""
+
+        return listOf(node.text, node.contentDesc).filter { it.isNotBlank() }.joinToString(" ")
     }
 
     /** Pull the screenable target text (selector/desc/typed text) from args. */

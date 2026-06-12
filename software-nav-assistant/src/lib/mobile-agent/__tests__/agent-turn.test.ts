@@ -220,6 +220,39 @@ describe("POST /api/mobile-agent/agent-turn", () => {
     ]);
   });
 
+  it("remaps the wire 'function' role to Gemini's 'user' role", async () => {
+    enableDevAuthBypass();
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [{ content: { parts: [{ text: "ok" }] } }],
+    });
+    mockGenAiClient(generateContent);
+
+    // A tool-result turn uses role "function" on the wire; Gemini only accepts
+    // "user"/"model", so the proxy must remap it or the turn is rejected.
+    await postAgentTurn(
+      buildRequestBody({
+        contents: [
+          { role: "user", parts: [{ text: "Open settings" }] },
+          {
+            role: "model",
+            parts: [{ function_call: { name: "tap", args: { x: 1, y: 2 } } }],
+          },
+          {
+            role: "function",
+            parts: [{ function_response: { name: "tap", response: { ok: true } } }],
+          },
+        ],
+      }),
+    );
+
+    expect(generateContent).toHaveBeenCalledOnce();
+    const params = generateContent.mock.calls[0][0];
+    const roles = params.contents.map((c: { role: string }) => c.role);
+    expect(roles).toEqual(["user", "model", "user"]);
+    // The functionResponse part itself is preserved under the remapped role.
+    expect(params.contents[2].parts[0]).toHaveProperty("functionResponse");
+  });
+
   it("degrades to text + finished on an OpenAI-compatible backend", async () => {
     enableDevAuthBypass();
     process.env.OPENAI_COMPAT_ENABLED = "true";
