@@ -120,6 +120,9 @@ dependencies {
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
     testImplementation(libs.junit)
+    // android.jar stubs org.json to throw "not mocked" in local JVM unit tests;
+    // the real reference implementation lets schema/JSON tests run on the JVM.
+    testImplementation(libs.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

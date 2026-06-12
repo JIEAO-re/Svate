@@ -17,11 +17,39 @@ type GenerateContentParams = {
   config?: {
     responseMimeType?: string;
     temperature?: number;
+    /** Upper bound on generated tokens; forwarded to the provider verbatim. */
+    maxOutputTokens?: number;
+    /** System prompt; forwarded to the provider verbatim. */
+    systemInstruction?: unknown;
+    /** Function-calling tool declarations; forwarded to the provider verbatim. */
+    tools?: unknown;
+  };
+};
+
+/** One part of a model candidate; mirrors the subset of the Gemini Part shape
+ * the agent loop consumes (text and functionCall). */
+type GenerateContentPart = {
+  text?: string;
+  functionCall?: {
+    name?: string;
+    args?: Record<string, unknown>;
+  };
+};
+
+/** One model candidate; mirrors the subset of the Gemini Candidate shape the
+ * agent loop consumes. */
+type GenerateContentCandidate = {
+  content?: {
+    parts?: GenerateContentPart[];
   };
 };
 
 type GenerateContentResponse = {
   text?: string;
+  /** Raw candidates, exposed so function-calling callers can read functionCall
+   * parts that the flattened `text` getter drops. Present for the Gemini SDK
+   * client; absent for the OpenAI-compatible adapter. */
+  candidates?: GenerateContentCandidate[];
   /** Adapter metadata; set when input had to be degraded for the provider. */
   meta?: {
     /** True when one or more image inputs could not be delivered to the model. */

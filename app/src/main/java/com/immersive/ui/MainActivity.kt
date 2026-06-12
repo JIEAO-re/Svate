@@ -92,6 +92,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -113,6 +114,8 @@ import com.immersive.ui.agent.AgentAccessibilityService
 import com.immersive.ui.agent.AgentCaptureService
 import com.immersive.ui.agent.DecisionOption
 import com.immersive.ui.agent.DecisionRequest
+import com.immersive.ui.agent.loop.PermissionDecision
+import com.immersive.ui.agent.loop.PermissionMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -186,6 +189,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var isAgentMode by mutableStateOf(true) // 默认代理模式
     private var pendingPlan: GoalChatResult? = null
     private var pendingSpeechText: String? = null
+
+    // New experimental "autonomous agent loop" mode (claude-code-style on-device loop).
+    // It coexists with the fixed pipeline above and is selected independently from the UI.
+    private var isAgentLoopMode by mutableStateOf(false)
+    // Shown once the first time the user switches the permission mode to AUTO (放行).
+    private var showAutoModeNotice by mutableStateOf(false)
 
     // Conversation session management
     private var chatSessions = mutableStateListOf<ChatSession>()
@@ -296,6 +305,12 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val scope = rememberCoroutineScope()
                 val viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                 val isGuideRunning by viewModel.isGuideRunning.collectAsState()
+                val agentLoopRunning by viewModel.agentLoopRunning.collectAsState()
+                val permissionMode by viewModel.permissionMode.collectAsState()
+                val agentLoopNarration by viewModel.agentLoopNarration.collectAsState()
+                val pendingPermission by viewModel.pendingPermission.collectAsState()
+                // Either entry point being active enables the shared stop UI.
+                val anyGuideRunning = isGuideRunning || agentLoopRunning
                 val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
                 // Listen for error events and surface them with a Snackbar.
@@ -354,21 +369,43 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 messages = messages.toList(),
                                 inputText = inputText,
                                 isSending = isSending,
-                                isGuideRunning = isGuideRunning,
+                                isGuideRunning = anyGuideRunning,
                                 statusText = viewModel.statusText.collectAsState().value,
                                 readyPlan = readyPlan,
                                 candidateApps = candidateApps.toList(),
                                 isTtsEnabled = isTtsEnabled,
                                 isTtsReady = isTtsReady,
                                 isAgentMode = isAgentMode,
+                                isAgentLoopMode = isAgentLoopMode,
                                 agentPhaseText = viewModel.agentPhaseText.collectAsState().value,
                                 pendingDecisionRequest = viewModel.pendingDecisionRequest.collectAsState().value,
+                                permissionMode = permissionMode,
+                                agentLoopPhase = viewModel.agentLoopPhase.collectAsState().value,
+                                agentLoopNarration = agentLoopNarration,
+                                pendingPermission = pendingPermission,
                                 onInputChange = { inputText = it },
                                 onSend = { sendCurrentMessage() },
                                 onVoice = { requestVoiceInput() },
                                 onToggleTts = { toggleTts() },
                                 onToggleAgentMode = { isAgentMode = !isAgentMode },
+                                onToggleAgentLoopMode = { enabled ->
+                                    isAgentLoopMode = enabled
+                                    // The fixed-pipeline agent/assist toggle is mutually exclusive
+                                    // with the experimental loop to avoid ambiguous start routing.
+                                    if (enabled) isAgentMode = true
+                                },
+                                onTogglePermissionMode = {
+                                    val next = viewModel.togglePermissionMode()
+                                    if (next == PermissionMode.AUTO && !hasSeenAutoNotice()) {
+                                        showAutoModeNotice = true
+                                        markAutoNoticeSeen()
+                                    }
+                                },
+                                onPermissionResolved = { id, decision ->
+                                    viewModel.onPermissionResolved(id, decision)
+                                },
                                 onStartGuide = { startGuide(it) },
+                                onStartAgentLoop = { goal -> startAgentLoopFromGoal(goal) },
                                 onStopGuide = { stopGuide() },
                                 onCandidateSelect = { selectCandidate(it) },
                                 onConfirmAction = { confirmed ->
@@ -454,6 +491,45 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                             fontWeight = FontWeight.SemiBold,
                                         )
                                     }
+                                }
+
+                                // Experimental autonomous agent loop mode (coexists with the fixed pipeline).
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.mode_agent_loop),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (isAgentLoopMode) Color(0xFF7C3AED) else Color(0xFFE5E5E5))
+                                                .bouncyClickable(enabled = !anyGuideRunning) {
+                                                    val enabled = !isAgentLoopMode
+                                                    isAgentLoopMode = enabled
+                                                    if (enabled) isAgentMode = true
+                                                }
+                                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                                        ) {
+                                            Text(
+                                                text = if (isAgentLoopMode) "On" else "Off",
+                                                color = if (isAgentLoopMode) Color.White else Color(0xFF6B6B80),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = stringResource(R.string.mode_agent_loop_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF8E8EA0),
+                                    )
                                 }
 
                                 // TTS toggle
@@ -576,6 +652,20 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         },
                         dismissButton = {
                             TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
+                        },
+                    )
+                }
+
+                // One-time explanation shown the first time the user enables AUTO (放行) mode.
+                if (showAutoModeNotice) {
+                    AlertDialog(
+                        onDismissRequest = { showAutoModeNotice = false },
+                        title = { Text(stringResource(R.string.permission_auto_notice_title)) },
+                        text = { Text(stringResource(R.string.permission_auto_notice_body)) },
+                        confirmButton = {
+                            TextButton(onClick = { showAutoModeNotice = false }) {
+                                Text(stringResource(R.string.action_done))
+                            }
                         },
                     )
                 }
@@ -715,6 +805,14 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun startGuide(plan: GoalChatResult) {
+        // Experimental autonomous agent loop: a self-contained on-device loop that owns
+        // its own capture/accessibility usage. It only needs the goal text and the
+        // accessibility service; it does not go through the fixed-pipeline projection flow.
+        if (isAgentLoopMode) {
+            startAgentLoopFromGoal(plan.inferredGoal)
+            return
+        }
+
         if (!Settings.canDrawOverlays(this)) {
             val intent = Intent(
                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -745,6 +843,36 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
     }
 
+    /**
+     * Launch the experimental autonomous agent loop from a goal string.
+     * Like agent mode, it requires the accessibility service to be enabled.
+     */
+    private fun startAgentLoopFromGoal(goal: String) {
+        val trimmed = goal.trim()
+        if (trimmed.isBlank()) {
+            Toast.makeText(this, "请先告诉我你想完成什么", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!AgentAccessibilityService.isServiceEnabled(this)) {
+            Toast.makeText(this, "自主 Agent 需要无障碍权限，正在打开设置…", Toast.LENGTH_LONG).show()
+            AgentAccessibilityService.openAccessibilitySettings(this)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        readyPlan = null
+        candidateApps.clear()
+        mainViewModel.setStatusText("自主 Agent 正在运行")
+        mainViewModel.startAgentLoop(trimmed)
+        // Floating stop button mirrors the fixed pipeline so the loop can be stopped from any app.
+        try { AgentStopOverlayService.start(this) } catch (_: Exception) {}
+    }
+
     private fun observeAgentViewModelEvents() {
         val viewModel = mainViewModel
         lifecycleScope.launch {
@@ -767,7 +895,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (isStoppingGuide) return
         isStoppingGuide = true
         try {
+            // Stop both entry points; whichever is idle is a harmless no-op.
             mainViewModel.stopGuide()
+            mainViewModel.stopAgentLoop()
+            try { AgentStopOverlayService.stop(this) } catch (_: Exception) {}
             Toast.makeText(this, "Guide stopped", Toast.LENGTH_SHORT).show()
             finishSessionWithSummary()
         } finally {
@@ -813,6 +944,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         getSharedPreferences(SETTINGS_PREFS, MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_PROFILE_EXTRACTION_ENABLED, isProfileExtractionEnabled)
+            .apply()
+    }
+
+    private fun hasSeenAutoNotice(): Boolean =
+        getSharedPreferences(SETTINGS_PREFS, MODE_PRIVATE).getBoolean(KEY_AUTO_NOTICE_SEEN, false)
+
+    private fun markAutoNoticeSeen() {
+        getSharedPreferences(SETTINGS_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_AUTO_NOTICE_SEEN, true)
             .apply()
     }
 
@@ -968,6 +1109,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     companion object {
         private const val SETTINGS_PREFS = "svate_settings"
         private const val KEY_PROFILE_EXTRACTION_ENABLED = "profile_extraction_enabled"
+        private const val KEY_AUTO_NOTICE_SEEN = "agent_auto_notice_seen"
     }
 }
 
@@ -984,14 +1126,23 @@ private fun GuideScreen(
     isTtsEnabled: Boolean,
     isTtsReady: Boolean,
     isAgentMode: Boolean,
+    isAgentLoopMode: Boolean,
     agentPhaseText: String,
     pendingDecisionRequest: DecisionRequest?,
+    permissionMode: PermissionMode,
+    agentLoopPhase: String,
+    agentLoopNarration: List<String>,
+    pendingPermission: MainViewModel.PermissionPrompt?,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
     onVoice: () -> Unit,
     onToggleTts: () -> Unit,
     onToggleAgentMode: () -> Unit,
+    onToggleAgentLoopMode: (Boolean) -> Unit,
+    onTogglePermissionMode: () -> Unit,
+    onPermissionResolved: (String, PermissionDecision) -> Unit,
     onStartGuide: (GoalChatResult) -> Unit,
+    onStartAgentLoop: (String) -> Unit,
     onStopGuide: () -> Unit,
     onCandidateSelect: (AppCandidate) -> Unit,
     onConfirmAction: (Boolean) -> Unit,
@@ -1040,6 +1191,33 @@ private fun GuideScreen(
                 color = Color(0xFF1A1A2E),
                 modifier = Modifier.weight(1f),
             )
+
+            // ===== Permission mode toggle (ASK = shield, AUTO = lightning) =====
+            val isAuto = permissionMode == PermissionMode.AUTO
+            val permIconBg = if (isAuto) Color(0xFFFEF3C7) else Color(0xFFE8F1FC)
+            val permIconTint = if (isAuto) Color(0xFFB45309) else Color(0xFF2563EB)
+            val permDesc = stringResource(
+                if (isAuto) R.string.permission_mode_auto_desc else R.string.permission_mode_ask_desc,
+            )
+            IconButton(
+                onClick = onTogglePermissionMode,
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(permIconBg)
+                    .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(8.dp)),
+            ) {
+                Icon(
+                    painter = painterResource(
+                        if (isAuto) R.drawable.ic_permission_auto else R.drawable.ic_permission_ask,
+                    ),
+                    contentDescription = permDesc,
+                    tint = permIconTint,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
 
             Box(
                 modifier = Modifier
@@ -1195,6 +1373,122 @@ private fun GuideScreen(
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        // ===== Agent loop: current phase + live narration / tool progress =====
+        if (isAgentLoopMode && (agentLoopPhase.isNotBlank() || agentLoopNarration.isNotEmpty())) {
+            // Show the most recent lines so the strip stays compact while the loop runs.
+            val recent = agentLoopNarration.takeLast(4)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF5F3FF).copy(alpha = 0.85f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (agentLoopPhase.isNotBlank()) {
+                    Text(
+                        text = agentLoopPhase,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFF5B21B6),
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                recent.forEach { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF5B21B6),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        // ===== Agent loop: pending permission request =====
+        // Reuses the high-risk confirm visual style, but offers the three loop choices.
+        if (pendingPermission != null) {
+            val prompt = pendingPermission
+            val riskLabel = when (prompt.riskClass) {
+                "safe" -> stringResource(R.string.permission_risk_safe)
+                "low" -> stringResource(R.string.permission_risk_low)
+                "high" -> stringResource(R.string.permission_risk_high)
+                else -> stringResource(R.string.permission_risk_normal)
+            }
+            val riskColor = when (prompt.riskClass) {
+                "high" -> Color(0xFFB91C1C)
+                "normal" -> Color(0xFFB45309)
+                else -> Color(0xFF15803D)
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFFFFBEB).copy(alpha = 0.9f))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.permission_request_title),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF92400E),
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "${prompt.toolName} · $riskLabel",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = riskColor,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = prompt.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF6B6B80),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { onPermissionResolved(prompt.toolCallId, PermissionDecision.GRANT_ONCE) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10A37F)),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.permission_grant_once),
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { onPermissionResolved(prompt.toolCallId, PermissionDecision.GRANT_ALWAYS) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color(0xFF10A37F)),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.permission_grant_always),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFF10A37F),
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { onPermissionResolved(prompt.toolCallId, PermissionDecision.DENY) },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color(0xFFD1D5DB)),
+                        contentPadding = PaddingValues(vertical = 8.dp),
+                    ) {
+                        Text(
+                            stringResource(R.string.permission_deny),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFFEF4444),
+                        )
                     }
                 }
             }
@@ -1396,14 +1690,19 @@ private fun GuideScreen(
                     )
                 }
                 Button(
-                    onClick = { onStartGuide(readyPlan) },
+                    onClick = {
+                        if (isAgentLoopMode) onStartAgentLoop(readyPlan.inferredGoal)
+                        else onStartGuide(readyPlan)
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10A37F)),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isAgentLoopMode) Color(0xFF7C3AED) else Color(0xFF10A37F),
+                    ),
                     contentPadding = PaddingValues(vertical = 12.dp),
                 ) {
                     Text(
-                        text = "Start Guide",
+                        text = if (isAgentLoopMode) stringResource(R.string.agent_loop_start) else "Start Guide",
                         fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.bodyMedium,
                     )
