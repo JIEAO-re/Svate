@@ -5,7 +5,6 @@ import android.util.Log
 import com.immersive.ui.agent.AgentAction
 import com.immersive.ui.agent.AgentActionSafety
 import com.immersive.ui.agent.ActionIntent
-import com.immersive.ui.agent.ActionSelector
 import com.immersive.ui.agent.IntentGuard
 import com.immersive.ui.agent.RiskLevel
 import com.immersive.ui.agent.SafetyCheckResult
@@ -89,6 +88,8 @@ class EdgeSecurityGuard(
         launchablePackages: Set<String>,
         screenshotBase64: String? = null,
         foregroundPackage: String? = null,
+        screenWidth: Int = 0,
+        screenHeight: Int = 0,
     ): SanitizeResult {
         val mergedText = "${action.targetDesc} ${action.reasoning} ${action.elderlyNarration}"
 
@@ -98,6 +99,8 @@ class EdgeSecurityGuard(
                 uiNodes = uiNodes,
                 screenshotBase64 = screenshotBase64,
                 foregroundPackage = foregroundPackage,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
             )
 
             if (injectionResult.shouldBlock) {
@@ -123,6 +126,14 @@ class EdgeSecurityGuard(
                     reason = "Potential visual injection: ${injectionResult.threats.firstOrNull()?.description}",
                 ))
 
+                if (!config.enableHumanInTheLoop) {
+                    return SanitizeResult(
+                        passed = false,
+                        action = toSafeWait(action, "injection_warning_no_hitl"),
+                        blockReason = "Potential injection threat rejected (human-in-the-loop disabled)",
+                        injectionScanResult = injectionResult,
+                    )
+                }
                 val confirmed = requestUserConfirmation(
                     action,
                     "Potential security threat detected on screen. Proceed with caution?",
@@ -138,7 +149,10 @@ class EdgeSecurityGuard(
             }
         }
 
-        // 1. High-risk actions trigger user confirmation immediately.
+        // 1. High-risk actions require user confirmation (human in the loop).
+        //    A user approval is necessary but not sufficient: the structural
+        //    checks below (hard keywords, HOMEWORK policy, CLICK/OPEN_APP/
+        //    OPEN_INTENT validation) still run after confirmation.
         if (action.riskLevel == RiskLevel.HIGH) {
             Log.w(TAG, "HIGH risk action detected: ${action.intent}")
             _securityEvents.tryEmit(SecurityEvent(
@@ -147,16 +161,22 @@ class EdgeSecurityGuard(
                 reason = "Action marked as HIGH risk by cloud reviewer",
             ))
 
+            if (!config.enableHumanInTheLoop) {
+                return SanitizeResult(
+                    passed = false,
+                    action = toSafeWait(action, "high_risk_no_hitl"),
+                    blockReason = "High-risk action rejected (human-in-the-loop disabled)",
+                )
+            }
             val confirmed = requestUserConfirmation(action, "This action is marked as high-risk. Proceed?")
-            return if (confirmed) {
-                SanitizeResult(passed = true, action = action)
-            } else {
-                SanitizeResult(
+            if (!confirmed) {
+                return SanitizeResult(
                     passed = false,
                     action = toSafeWait(action, "user_rejected_high_risk"),
                     blockReason = "User rejected high-risk action",
                 )
             }
+            // Confirmed: fall through to the structural checks below.
         }
 
         // 2. Hard-block keyword detection
@@ -184,20 +204,27 @@ class EdgeSecurityGuard(
                     reason = "HOMEWORK mode blocks submit/publish actions",
                 ))
 
-                // Ask for user confirmation instead of blocking immediately.
+                // Ask for user confirmation instead of blocking immediately;
+                // block outright when human-in-the-loop is disabled.
+                if (!config.enableHumanInTheLoop) {
+                    return SanitizeResult(
+                        passed = false,
+                        action = toSafeWait(action, "homework_submit_no_hitl"),
+                        blockReason = "HOMEWORK submit rejected (human-in-the-loop disabled)",
+                    )
+                }
                 val confirmed = requestUserConfirmation(
                     action,
                     "HOMEWORK mode detected a submit action. This may submit your homework. Proceed?",
                 )
-                return if (confirmed) {
-                    SanitizeResult(passed = true, action = action)
-                } else {
-                    SanitizeResult(
+                if (!confirmed) {
+                    return SanitizeResult(
                         passed = false,
                         action = toSafeWait(action, "homework_submit_blocked"),
                         blockReason = "User blocked homework submission",
                     )
                 }
+                // Confirmed: fall through to the remaining structural checks.
             }
         }
 
@@ -240,7 +267,7 @@ class EdgeSecurityGuard(
                 }
             }
 
-            else -> { /* 其他 intent 类型暂不特殊处理 */ }
+            else -> { /* Other intent types need no special handling yet. */ }
         }
 
         // 5. WARNING level: record it but allow execution
@@ -276,9 +303,21 @@ class EdgeSecurityGuard(
         } ?: false
     }
 
+    /**
+     * English keywords use word-boundary matching so short words like "pay" or
+     * "post" do not false-match inside "prepay" or "poster"; Chinese keywords
+     * keep substring matching (no word boundaries in CJK text).
+     */
     private fun containsBlockedKeyword(text: String, keywords: List<String>): Boolean {
         val lowerText = text.lowercase()
-        return keywords.any { keyword -> lowerText.contains(keyword.lowercase()) }
+        return keywords.any { keyword ->
+            val lowerKeyword = keyword.lowercase()
+            if (lowerKeyword.any { it.code > 127 }) {
+                lowerText.contains(lowerKeyword)
+            } else {
+                Regex("\\b${Regex.escape(lowerKeyword)}\\b").containsMatchIn(lowerText)
+            }
+        }
     }
 
     private fun toSafeWait(action: AgentAction, reason: String): AgentAction {
@@ -310,14 +349,14 @@ class EdgeSecurityGuard(
 data class SecurityGuardConfig(
     val confirmationTimeoutMs: Long = 60_000L,
     val enableHumanInTheLoop: Boolean = true,
-    val enableInjectionGuard: Boolean = true, // P2 新增
+    val enableInjectionGuard: Boolean = true, // P2 addition
 )
 
 data class SanitizeResult(
     val passed: Boolean,
     val action: AgentAction,
     val blockReason: String? = null,
-    val injectionScanResult: InjectionScanResult? = null, // P2 新增
+    val injectionScanResult: InjectionScanResult? = null, // P2 addition
 )
 
 data class ConfirmationRequest(
@@ -332,8 +371,8 @@ enum class SecurityEventType {
     WARNING_LOGGED,
     USER_CONFIRMED,
     USER_REJECTED,
-    INJECTION_DETECTED,   // P2 新增
-    INJECTION_WARNING,    // P2 新增
+    INJECTION_DETECTED,   // P2 addition
+    INJECTION_WARNING,    // P2 addition
 }
 
 data class SecurityEvent(

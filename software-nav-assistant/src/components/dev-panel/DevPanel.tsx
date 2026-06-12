@@ -3,8 +3,11 @@
 import React from "react";
 import { useTaskContext } from "@/lib/context/TaskProvider";
 
+// Debug panel that mirrors the raw /api/mobile-agent/next-step response.
+// Every value under sections 2-5 comes verbatim from the backend payload;
+// section 1 is client-side session state and is labeled as such.
 export function DevPanel() {
-  const { context, currentDecision, isLoading } = useTaskContext();
+  const { context, currentTurn, isLoading } = useTaskContext();
 
   return (
     <div className="h-full bg-slate-950 text-emerald-400 font-mono text-xs overflow-y-auto flex flex-col rounded-[2.5rem] border-[8px] border-slate-900 shadow-2xl custom-scrollbar">
@@ -21,9 +24,11 @@ export function DevPanel() {
       </div>
 
       <div className="p-5 space-y-5 flex-1">
-        {/* 1. 全局状态追踪 */}
+        {/* 1. Client-side session state (maintained by the browser, not the backend) */}
         <section className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-          <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">1. Context Tracker</h4>
+          <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">
+            1. Context Tracker <span className="text-slate-600 normal-case tracking-normal">(client state)</span>
+          </h4>
           <div className="grid grid-cols-2 gap-2">
             <div><span className="text-slate-400">Session:</span> {context.session_id.split('-')[0]}...</div>
             <div><span className="text-slate-400">Step:</span> <span className="text-blue-400 font-bold">{context.current_step_index}</span></div>
@@ -31,58 +36,83 @@ export function DevPanel() {
           </div>
         </section>
 
-        {!currentDecision && !isLoading && (
+        {!currentTurn && !isLoading && (
           <div className="text-slate-600 text-center py-10 border border-dashed border-slate-800 rounded-xl">
              Waiting for screenshot input...
           </div>
         )}
 
-        {currentDecision && (
+        {currentTurn && (
           <div className="space-y-5 animate-in slide-in-from-bottom-2 duration-500">
-            {/* 2. 验证器引擎（防偏航） */}
+            {/* 2. Reviewer output exactly as returned by the backend */}
             <section className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-              <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">2. Verifier Engine</h4>
+              <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">2. Reviewer</h4>
               <div className="space-y-1">
-                <p><span className="text-slate-400">P_SUCCESS:</span> {currentDecision.verification.is_previous_step_successful ? '✅ TRUE' : '❌ FALSE'}</p>
-                <p><span className="text-slate-400">DEVIATION:</span> {currentDecision.verification.is_deviation ? '⚠️ TRUE' : '✅ FALSE'}</p>
+                <p>
+                  <span className="text-slate-400">VERDICT:</span>{" "}
+                  <span className={currentTurn.reviewer.verdict === "APPROVE" ? "text-emerald-300 font-bold" : "text-amber-300 font-bold"}>
+                    {currentTurn.reviewer.verdict}
+                  </span>
+                </p>
+                <p><span className="text-slate-400">MODEL:</span> {currentTurn.reviewer.model} ({currentTurn.reviewer.latency_ms}ms)</p>
                 <p className="mt-2 text-emerald-200 bg-black/30 p-2 rounded leading-relaxed">
                   <span className="text-slate-500">REASON: </span>
-                  {currentDecision.verification.reasoning}
+                  {currentTurn.reviewer.reason}
                 </p>
               </div>
             </section>
 
-            {/* 3. 安全守卫（物理熔断） */}
+            {/* 3. Safety guard verdict as returned by the backend */}
             <section className="bg-slate-900 p-4 rounded-xl border border-slate-800">
                <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">3. Safety Guard</h4>
-               <div className="flex gap-4">
-                 <div className={`px-2 py-1 rounded ${currentDecision.screen_state.risk_detected ? 'bg-red-900/50 text-red-400 border border-red-800/50 font-bold' : 'bg-black/30 text-slate-400'}`}>
-                    Detect: {currentDecision.screen_state.risk_detected ? 'HIGH_RISK 🚨' : 'SAFE'}
+               <div className="flex gap-4 flex-wrap">
+                 <div className={`px-2 py-1 rounded ${currentTurn.guard.risk_level === 'HIGH' ? 'bg-red-900/50 text-red-400 border border-red-800/50 font-bold' : 'bg-black/30 text-slate-400'}`}>
+                    Guard: {currentTurn.guard.risk_level === 'HIGH' ? 'HIGH_RISK 🚨' : currentTurn.guard.risk_level}
                  </div>
-                 <div className={`px-2 py-1 rounded ${currentDecision.next_step.risk_level === 'HIGH' ? 'bg-red-900/50 text-red-400 font-bold' : 'bg-black/30 text-slate-400'}`}>
-                    Risk Level: {currentDecision.next_step.risk_level}
+                 <div className={`px-2 py-1 rounded ${currentTurn.final_action.risk_level === 'HIGH' ? 'bg-red-900/50 text-red-400 font-bold' : 'bg-black/30 text-slate-400'}`}>
+                    Action Risk: {currentTurn.final_action.risk_level}
                  </div>
                </div>
+               {currentTurn.guard.block_reason && (
+                 <p className="mt-2 text-red-300 bg-black/30 p-2 rounded leading-relaxed">
+                   <span className="text-slate-500">BLOCK: </span>
+                   {currentTurn.guard.block_reason}
+                 </p>
+               )}
             </section>
 
-            {/* 4. CoT 与动作规划 */}
+            {/* 4. Planner output and the approved final action */}
             <section className="bg-slate-900 p-4 rounded-xl border border-slate-800 border-l-2 border-l-blue-500">
-              <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">4. Planner (CoT)</h4>
-              <div className="text-indigo-300 mb-3 leading-relaxed italic">
-                &quot;{currentDecision.audit_metadata.reasoning_trace}&quot;
+              <h4 className="text-slate-500 mb-2 tracking-widest uppercase font-bold">4. Planner</h4>
+              <div className="text-slate-400 mb-3">
+                {currentTurn.planner.model} ({currentTurn.planner.latency_ms}ms) &bull; {currentTurn.planner.candidates.length} candidate{currentTurn.planner.candidates.length === 1 ? "" : "s"}
               </div>
               <div className="bg-black p-3 rounded space-y-1">
-                <div><span className="text-blue-400">intent:</span> <span className="text-yellow-300">&quot;{currentDecision.next_step.intent}&quot;</span></div>
-                <div><span className="text-blue-400">target:</span> <span className="text-yellow-300">&quot;{currentDecision.next_step.target_element_desc}&quot;</span></div>
-                <div><span className="text-blue-400">bbox:</span> <span className="text-orange-300">{JSON.stringify(currentDecision.next_step.target_bbox)}</span></div>
+                <div><span className="text-blue-400">intent:</span> <span className="text-yellow-300">&quot;{currentTurn.final_action.intent}&quot;</span></div>
+                <div><span className="text-blue-400">target:</span> <span className="text-yellow-300">&quot;{currentTurn.final_action.target_desc}&quot;</span></div>
+                {currentTurn.final_action.spatial_coordinates != null && (
+                  <div><span className="text-blue-400">spatial:</span> <span className="text-orange-300">{JSON.stringify(currentTurn.final_action.spatial_coordinates)}</span></div>
+                )}
+                {currentTurn.final_action.target_bbox != null && (
+                  <div><span className="text-blue-400">bbox:</span> <span className="text-orange-300">{JSON.stringify(currentTurn.final_action.target_bbox)}</span></div>
+                )}
+              </div>
+              <div className="mt-3 text-indigo-300 leading-relaxed italic">
+                &quot;{currentTurn.final_action.narration}&quot;
               </div>
             </section>
 
-            {/* 5. 下一步预期标尺 */}
+            {/* 5. Checkpoint the backend expects on the next screen */}
             <section className="bg-slate-900 p-4 rounded-xl border border-slate-800 text-cyan-300">
                <span className="text-slate-500 font-bold uppercase">5. Next Checkpoint:</span><br/>
-               {currentDecision.next_screen_checkpoint.expected_page_type}
+               {currentTurn.checkpoint.expected_page_type || "(none)"}
+               {currentTurn.checkpoint.expected_elements.length > 0 && (
+                 <span className="text-cyan-500"> &bull; {currentTurn.checkpoint.expected_elements.join(", ")}</span>
+               )}
             </section>
+
+            {/* Server trace id for cross-referencing backend logs */}
+            <p className="text-slate-600 truncate">trace: {currentTurn.trace_id}</p>
           </div>
         )}
       </div>

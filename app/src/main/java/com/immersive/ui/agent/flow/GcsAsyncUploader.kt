@@ -1,6 +1,7 @@
 package com.immersive.ui.agent.flow
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -127,38 +128,40 @@ class GcsAsyncUploader(
     ): UploadResult {
         var lastError: Exception? = null
 
-        repeat(config.maxRetries) { attempt ->
+        for (attempt in 0 until config.maxRetries) {
             try {
                 val signedUrlResponse = requestSignedUrl(contentType, metadata)
                 if (signedUrlResponse == null) {
                     Log.w(TAG, "[$uploadId] Failed to get signed URL, attempt ${attempt + 1}")
                     lastError = Exception("Failed to get signed URL")
-                    return@repeat
-                }
-
-                val uploadSuccess = uploadToGcs(
-                    signedUrl = signedUrlResponse.signedUrl,
-                    imageBytes = imageBytes,
-                    contentType = contentType,
-                )
-
-                if (uploadSuccess) {
-                    Log.d(TAG, "[$uploadId] Upload success: ${signedUrlResponse.gcsUri}")
-                    return UploadResult(
-                        uploadId = uploadId,
-                        success = true,
-                        gcsUri = signedUrlResponse.gcsUri,
-                        metadata = metadata,
-                    )
                 } else {
+                    val uploadSuccess = uploadToGcs(
+                        signedUrl = signedUrlResponse.signedUrl,
+                        imageBytes = imageBytes,
+                        contentType = contentType,
+                    )
+
+                    if (uploadSuccess) {
+                        Log.d(TAG, "[$uploadId] Upload success: ${signedUrlResponse.gcsUri}")
+                        return UploadResult(
+                            uploadId = uploadId,
+                            success = true,
+                            gcsUri = signedUrlResponse.gcsUri,
+                            metadata = metadata,
+                        )
+                    }
                     Log.w(TAG, "[$uploadId] GCS upload failed, attempt ${attempt + 1}")
                     lastError = Exception("GCS upload failed")
                 }
+            } catch (e: CancellationException) {
+                // Never swallow cooperative cancellation of the caller.
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "[$uploadId] Upload error, attempt ${attempt + 1}", e)
                 lastError = e
             }
 
+            // Exponential backoff after every failed attempt (except the last).
             if (attempt < config.maxRetries - 1) {
                 val delayMs = config.retryBaseDelayMs * (1 shl attempt)
                 delay(delayMs)

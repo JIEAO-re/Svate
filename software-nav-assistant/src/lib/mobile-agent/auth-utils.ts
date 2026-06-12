@@ -9,7 +9,6 @@ export interface AuthResult {
 
 const FIREBASE_APP_CHECK_JWKS_URL = "https://firebaseappcheck.googleapis.com/v1/jwks";
 const firebaseJWKS = createRemoteJWKSet(new URL(FIREBASE_APP_CHECK_JWKS_URL));
-const FIREBASE_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || "";
 const JWT_PUBLIC_KEY_PEM = process.env.JWT_PUBLIC_KEY?.trim() || "";
 const JWT_EXPECTED_ISSUER = process.env.JWT_EXPECTED_ISSUER?.trim() || "mobile-agent-android";
 const JWT_EXPECTED_AUDIENCE = process.env.JWT_EXPECTED_AUDIENCE?.trim() || "mobile-agent-api";
@@ -29,14 +28,21 @@ export async function verifyFirebaseAppCheck(token: string): Promise<AuthResult>
     return { valid: false, error: "invalid_app_check_token_format" };
   }
 
-  try {
-    const expectedAudience = FIREBASE_PROJECT_ID
-      ? [`projects/${FIREBASE_PROJECT_ID}`]
-      : undefined;
+  // Fail closed: without a configured project we cannot verify the token
+  // audience, so any App Check token must be rejected instead of silently
+  // skipping the audience check.
+  const firebaseProjectId = process.env.GOOGLE_CLOUD_PROJECT?.trim() || "";
+  if (!firebaseProjectId) {
+    console.error(
+      "[auth-utils] GOOGLE_CLOUD_PROJECT is not configured; rejecting App Check token because the audience cannot be verified",
+    );
+    return { valid: false, error: "app_check_project_not_configured" };
+  }
 
+  try {
     const { payload } = await jwtVerify(token, firebaseJWKS, {
       issuer: "https://firebaseappcheck.googleapis.com/",
-      audience: expectedAudience,
+      audience: [`projects/${firebaseProjectId}`],
       clockTolerance: 30,
     });
 

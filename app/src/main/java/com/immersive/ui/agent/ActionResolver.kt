@@ -7,7 +7,24 @@ data class ActionResolveResult(
     val node: UiNode,
     val score: Int,
     val normalizedBbox: IntArray,
-)
+) {
+    // Array fields need content-based equality; the generated implementation
+    // would compare normalizedBbox by reference.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ActionResolveResult) return false
+        return node == other.node &&
+            score == other.score &&
+            normalizedBbox.contentEquals(other.normalizedBbox)
+    }
+
+    override fun hashCode(): Int {
+        var result = node.hashCode()
+        result = 31 * result + score
+        result = 31 * result + normalizedBbox.contentHashCode()
+        return result
+    }
+}
 
 // ============================================================================
 // P1 addition: Spatial Grounding coordinate resolution result

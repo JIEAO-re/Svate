@@ -7,13 +7,13 @@ import { GuidanceCard } from "@/components/elderly-ui/GuidanceCard";
 import { DevPanel } from "@/components/dev-panel/DevPanel";
 import { GoalChatPanel, GoalPlan } from "@/components/chat/GoalChatPanel";
 import { Smartphone, RefreshCw, Play, Square } from "lucide-react";
-import { StatusIndicator, DemoModeWarningBanner } from "@/components/status-indicator/StatusIndicator";
+import { StatusIndicator, BackendStatusBanner } from "@/components/status-indicator/StatusIndicator";
 
 // ==========================================
 // Core view: hooks can only be used when wrapped by the Provider
 // ==========================================
 function MainInterface() {
-  const { submitNewScreen, isLoading, context, resetSession, demoMode } = useTaskContext();
+  const { submitNewScreen, isLoading, context, resetSession } = useTaskContext();
   const [isGuideStarted, setIsGuideStarted] = useState(false);
   const [isAutoCaptureRunning, setIsAutoCaptureRunning] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
@@ -158,12 +158,11 @@ function MainInterface() {
   return (
     <div className="flex flex-col h-full bg-slate-50 rounded-[3rem] p-6 lg:p-10 shadow-2xl relative overflow-y-auto border border-slate-200">
 
-      {/* 顶部控制栏 */}
+      {/* Top control bar */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2 tracking-tight">
           <Smartphone className="w-8 h-8 text-blue-600" />
           亲情导航向导 <span className="bg-blue-100 text-blue-600 text-xs px-2 py-1 rounded-full font-bold ml-2">Beta</span>
-          {demoMode && <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full font-bold ml-1">Demo Mode</span>}
         </h1>
         <button
           onClick={handleResetAll}
@@ -183,13 +182,13 @@ function MainInterface() {
         </div>
       ) : (
         <>
-          {/* 视觉渲染与长辈交互区 */}
+          {/* Visual rendering and elderly interaction area */}
           <div className="flex-1 w-full max-w-md mx-auto flex flex-col">
             <ScreenRenderer />
             <GuidanceCard />
           </div>
 
-          {/* 底部交互区：启动屏幕共享后，每秒自动截图上传 */}
+          {/* Bottom controls: after screen sharing starts, auto-capture and upload one frame per second */}
           <div className="w-full max-w-md mx-auto mt-8">
             <div className="text-center text-slate-400 font-bold text-sm mb-3">👇 [演示控制台] 启动后每 1 秒自动上传一帧截图</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -233,7 +232,7 @@ export default function Page() {
     <TaskProvider>
       <main className="min-h-screen bg-slate-900 p-4 lg:p-6 font-sans flex flex-col">
 
-        {/* Hackathon 专属头部 */}
+        {/* Hackathon header */}
         <header className="mb-6 text-center lg:text-left shrink-0 pl-2 mt-2">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
@@ -242,10 +241,10 @@ export default function Page() {
             </div>
             <StatusIndicator />
           </div>
-          <DemoModeWarningBanner />
+          <BackendStatusBanner />
         </header>
 
-        {/* 双栏网格：左侧产品体验，右侧评委黑箱 */}
+        {/* Two-column grid: product experience on the left, judge black box on the right */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_400px] xl:grid-cols-[1fr_500px] gap-8 min-h-0">
           <div className="h-full min-h-[750px] max-w-3xl mx-auto w-full">
             <MainInterface />

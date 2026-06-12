@@ -1,5 +1,6 @@
 import { buildReviewerPrompt } from "@/lib/mobile-agent/prompts";
 import { generateJsonWithImage } from "@/lib/mobile-agent/model-client";
+import { buildFramePart } from "@/lib/mobile-agent/frame-content";
 import {
   ActionCommand,
   NextStepRequest,
@@ -21,14 +22,20 @@ export async function runReviewer(
   candidates: ActionCommand[],
 ): Promise<{ model: string; output: ReviewerOutput; latencyMs: number }> {
   const latestFrame = pickLatestObservationFrame(request.observation);
-  if (!latestFrame.imageBase64) {
+  // GCS-referenced frames are first-class: build the same kind of content
+  // part the planner uses, so reference-mode observations no longer fail.
+  if (!latestFrame.imageBase64 && !latestFrame.gcsUri) {
     throw new Error("reviewer requires at least one observation frame");
   }
+  const imagePart = buildFramePart({
+    imageBase64: latestFrame.imageBase64 ?? undefined,
+    gcsUri: latestFrame.gcsUri ?? undefined,
+  });
   const prompt = buildReviewerPrompt(request, candidates);
   const { output, latencyMs } = await generateJsonWithImage({
     model: REVIEWER_MODEL,
     prompt,
-    imageBase64: latestFrame.imageBase64,
+    imagePart,
     schema: ReviewerOutputSchema,
     safeFallback: REVIEWER_SAFE_FALLBACK,
   });

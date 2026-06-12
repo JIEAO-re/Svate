@@ -12,6 +12,7 @@ export const ALLOWED_SCREENSHOT_UPLOAD_CONTENT_TYPES = [
 ] as const;
 
 const SIGNED_WRITE_URL_TTL_MS = 15 * 60 * 1000;
+const SIGNED_READ_URL_TTL_MS = 15 * 60 * 1000;
 
 let storage: Storage | null = null;
 
@@ -19,6 +20,39 @@ export function getStorageClient(): Storage {
   if (storage) return storage;
   storage = new Storage();
   return storage;
+}
+
+/** Parse a gs://bucket/object URI into bucket and object path, or null if malformed. */
+export function parseGcsUri(gcsUri: string): { bucket: string; objectPath: string } | null {
+  const match = gcsUri.trim().match(/^gs:\/\/([a-z0-9][-a-z0-9_.]*[a-z0-9])\/(.+)$/);
+  if (!match) return null;
+  return { bucket: match[1], objectPath: match[2] };
+}
+
+/**
+ * Create a V4 signed read URL for a gs:// URI so providers that cannot read
+ * GCS directly (e.g. OpenAI-compatible gateways) can fetch the object over
+ * HTTPS. Throws when the URI is malformed or signing fails.
+ */
+export async function createSignedReadUrlForGcsUri(
+  gcsUri: string,
+  ttlMs: number = SIGNED_READ_URL_TTL_MS,
+): Promise<string> {
+  const parsed = parseGcsUri(gcsUri);
+  if (!parsed) {
+    throw new Error(`invalid gcs uri: ${gcsUri}`);
+  }
+
+  const [signedUrl] = await getStorageClient()
+    .bucket(parsed.bucket)
+    .file(parsed.objectPath)
+    .getSignedUrl({
+      version: "v4",
+      action: "read",
+      expires: Date.now() + ttlMs,
+    });
+
+  return signedUrl;
 }
 
 function getExtensionFromContentType(contentType: string): string {

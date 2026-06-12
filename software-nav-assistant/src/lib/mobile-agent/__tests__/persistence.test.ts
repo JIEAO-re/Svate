@@ -66,9 +66,48 @@ describe("persistence", () => {
     );
 
     expect(insertCalls).toHaveLength(3);
-    expect(insertCalls[0]?.[1]).toHaveLength(600);
-    expect(insertCalls[1]?.[1]).toHaveLength(600);
-    expect(insertCalls[2]?.[1]).toHaveLength(300);
+    expect(insertCalls[0]?.[1]).toHaveLength(700);
+    expect(insertCalls[1]?.[1]).toHaveLength(700);
+    expect(insertCalls[2]?.[1]).toHaveLength(350);
+  });
+
+  it("deduplicates telemetry events by client_event_id", async () => {
+    state.clientQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+    state.dbQuery.mockResolvedValue({ rowCount: 1, rows: [] });
+
+    vi.doMock("pg", () => ({
+      Pool: vi.fn().mockImplementation(() => ({
+        connect: vi.fn().mockResolvedValue({
+          query: state.clientQuery,
+          release: state.release,
+        }),
+        query: state.dbQuery,
+      })),
+    }));
+
+    const { saveTelemetryEvents } = await import("@/lib/mobile-agent/persistence");
+
+    await saveTelemetryEvents([
+      {
+        trace_id: "trace_1",
+        session_id: "sess_1",
+        turn_index: 0,
+        event_type: "action_executed",
+        payload: { latency_ms: 12 },
+        ts: "2026-06-12T00:00:00.000Z",
+        client_event_id: "evt_abc123",
+      },
+    ]);
+
+    const insertCall = state.clientQuery.mock.calls.find(([sql]) =>
+      String(sql).includes("INSERT INTO agent_telemetry_events"),
+    );
+
+    expect(insertCall).toBeDefined();
+    expect(String(insertCall?.[0])).toContain(
+      "ON CONFLICT (client_event_id) WHERE client_event_id IS NOT NULL DO NOTHING",
+    );
+    expect(insertCall?.[1]).toContain("evt_abc123");
   });
 
   it("skips session summary updates when turn events already exist", async () => {

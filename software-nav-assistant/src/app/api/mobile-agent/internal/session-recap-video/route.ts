@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
+  processSessionRecapPollJob,
   processSessionRecapVideoJob,
   type SessionRecapPayload,
 } from "@/lib/mobile-agent/session-recap-video";
@@ -11,6 +12,9 @@ const SessionRecapPayloadSchema = z.object({
   session_id: z.string().min(1),
   trace_id: z.string().min(1),
   goal: z.string().min(1),
+  action: z.enum(["generate", "poll"]).default("generate"),
+  operation_name: z.string().min(1).optional(),
+  attempt: z.number().int().min(1).optional(),
 });
 
 export const maxDuration = 30;
@@ -42,6 +46,23 @@ export async function POST(req: Request) {
         },
         { status: 400 },
       );
+    }
+
+    // Poll tasks check the pending Veo operation and either persist the final
+    // video URI, fail the job, or re-enqueue themselves until done.
+    if (parsed.data.action === "poll") {
+      if (!parsed.data.operation_name) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "invalid_session_recap_payload",
+            details: "operation_name is required when action is poll",
+          },
+          { status: 400 },
+        );
+      }
+      await processSessionRecapPollJob(parsed.data as SessionRecapPayload);
+      return NextResponse.json({ success: true });
     }
 
     await processSessionRecapVideoJob(parsed.data as SessionRecapPayload);

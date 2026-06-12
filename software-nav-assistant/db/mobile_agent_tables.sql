@@ -53,11 +53,16 @@ CREATE TABLE IF NOT EXISTS agent_telemetry_events (
   turn_index INT NOT NULL,
   event_type TEXT NOT NULL,
   payload JSONB NOT NULL,
-  ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Optional client-generated idempotency key for retried batches.
+  client_event_id TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_telemetry_events_session_turn
   ON agent_telemetry_events(session_id, turn_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_telemetry_events_client_event_id
+  ON agent_telemetry_events(client_event_id)
+  WHERE client_event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_live_turn_metrics (
   id BIGSERIAL PRIMARY KEY,

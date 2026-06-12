@@ -314,9 +314,14 @@ export const NextStepResponseSchema = z.object({
   guard: z.object({
     risk_level: AgentRiskLevelSchema,
     block_reason: z.string().nullable(),
+    // Optional traceability marker for heuristic overrides (e.g. when the
+    // arbiter substitutes a search recovery action for the planner output).
+    notes: z.string().nullable().optional(),
   }),
   live_runtime: z.object({
-    used_live: z.literal(true),
+    // True only when the planner actually called the model for this turn
+    // (false for dedup skips and exhausted-retry fallbacks).
+    used_live: z.boolean(),
     model: z.string().min(1),
     connect_latency_ms: z.number().int().nonnegative(),
     inference_latency_ms: z.number().int().nonnegative(),
@@ -376,6 +381,9 @@ export const TelemetryEventSchema = z.object({
   event_type: z.string().min(1),
   payload: z.record(z.string(), z.any()),
   ts: z.string().datetime({ offset: true }).optional(),
+  // Optional client-generated idempotency key. When present, retried batches
+  // are deduplicated server-side via a unique partial index.
+  client_event_id: z.string().min(1).max(128).optional(),
 }).superRefine((event, ctx) => {
   const forbiddenKey = findForbiddenTelemetryKey(event.payload);
   if (!forbiddenKey) return;

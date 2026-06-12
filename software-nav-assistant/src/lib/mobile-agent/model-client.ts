@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Part } from "@google/genai";
 import { getGenAIClient, resolveModelWithFallback } from "@/lib/mobile-agent/genai-client";
 
 const MAX_RETRIES = 2;
@@ -6,8 +7,11 @@ const MAX_RETRIES = 2;
 type GenerateJsonOptions<T extends z.ZodTypeAny> = {
   model: string;
   prompt: string;
-  imageBase64: string;
-  imageMimeType?: string;
+  /**
+   * Image content part built via the shared frame-content helpers, so both
+   * inline base64 frames and GCS file references use the same path.
+   */
+  imagePart: Part;
   schema: T;
   /** Optional safe fallback value returned when all retries are exhausted. */
   safeFallback?: z.infer<T>;
@@ -27,12 +31,7 @@ export async function generateJsonWithImage<T extends z.ZodTypeAny>(
         model: resolvedModel,
         contents: [
           options.prompt,
-          {
-            inlineData: {
-              data: options.imageBase64,
-              mimeType: options.imageMimeType || "image/jpeg",
-            },
-          },
+          options.imagePart,
         ],
         config: {
           responseMimeType: "application/json",

@@ -110,11 +110,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.immersive.ui.agent.AgentEventBus
 import androidx.core.content.ContextCompat
 import com.immersive.ui.agent.AgentAccessibilityService
-import com.immersive.ui.agent.AgentAction
 import com.immersive.ui.agent.AgentCaptureService
 import com.immersive.ui.agent.DecisionOption
 import com.immersive.ui.agent.DecisionRequest
-import com.immersive.ui.agent.flow.OpenClawOrchestrator
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -122,8 +120,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
-import com.immersive.ui.agent.AgentPhase
-import com.immersive.ui.agent.TaskSpec
 import com.immersive.ui.guide.AppCandidate
 import com.immersive.ui.guide.GoalChatResult
 import com.immersive.ui.guide.GuideAiEngines
@@ -131,9 +127,9 @@ import com.immersive.ui.guide.GuideCaptureService
 import com.immersive.ui.guide.InstalledAppScanner
 import com.immersive.ui.guide.SimpleChatMessage
 import com.immersive.ui.overlay.AgentStopOverlayService
-import com.immersive.ui.overlay.OverlayGuideService
 import com.immersive.ui.ui.theme.UINavTheme
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.Executors
 
 private data class UiMessage(
@@ -178,12 +174,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private var inputText by mutableStateOf("")
     private var isSending by mutableStateOf(false)
-    private var isGuideRunning by mutableStateOf(false)
-    private var statusText by mutableStateOf("Please confirm your task goal with AI first")
     private var readyPlan by mutableStateOf<GoalChatResult?>(null)
     private var candidateApps = mutableStateListOf<AppCandidate>()
     private var isTtsEnabled by mutableStateOf(false) // 默认静音
     private var isTtsReady by mutableStateOf(false)
+
+    // Privacy: user profile extraction uploads conversation content, so it is opt-in (default off).
+    private var isProfileExtractionEnabled by mutableStateOf(false)
 
     // Agent autonomous mode: state moved to MainViewModel, local toggle kept here.
     private var isAgentMode by mutableStateOf(true) // 默认代理模式
@@ -218,6 +215,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         enableEdgeToEdge()
         textToSpeech = TextToSpeech(this, this)
         mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
+        isProfileExtractionEnabled = getSharedPreferences(SETTINGS_PREFS, MODE_PRIVATE)
+            .getBoolean(KEY_PROFILE_EXTRACTION_ENABLED, false)
 
         // Scan installed apps and inject them into the AI engine.
         val apps = InstalledAppScanner.getInstalledApps(this)
@@ -228,7 +227,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             if (result.resultCode == Activity.RESULT_OK && result.data != null && plan != null) {
                 if (isAgentMode) {
                     AgentCaptureService.start(this, result.resultCode, result.data!!)
-                    startAgent(plan)
+                    // The ViewModel owns the agent lifecycle (sets isGuideRunning on success/failure).
+                    mainViewModel.startAgent(plan)
                 } else {
                     GuideCaptureService.start(
                         context = this,
@@ -237,10 +237,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         targetAppName = plan.targetAppName,
                         inferredGoal = plan.inferredGoal,
                     )
+                    // Assist mode runs while the user is in another app, so the floating
+                    // stop button is the visible stop entry point in that state.
+                    try { AgentStopOverlayService.start(this) } catch (_: Exception) {}
+                    mainViewModel.setGuideRunning(true)
                 }
-                isGuideRunning = true
                 val modeLabel = if (isAgentMode) "Agent mode" else "Assist mode"
-                statusText = "$modeLabel guide is running"
+                mainViewModel.setStatusText("$modeLabel guide is running")
                 Toast.makeText(this, "Guide started. Switch to the target app to continue.", Toast.LENGTH_SHORT).show()
                 moveTaskToBack(true)
             } else {
@@ -272,13 +275,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
         notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-        // Load stored conversation history.
-        chatSessions.addAll(ChatStorage.loadSessions(this))
-        if (chatSessions.isEmpty()) {
-            startNewSession()
-        } else {
-            // Restore the most recent session.
-            switchSession(chatSessions.first().id)
+        // Load stored conversation history from Room; legacy SharedPreferences data
+        // is migrated inside loadSessionsFromDb on first run.
+        lifecycleScope.launch {
+            chatSessions.addAll(mainViewModel.loadSessionsFromDb())
+            if (chatSessions.isEmpty()) {
+                startNewSession()
+            } else {
+                // Restore the most recent session.
+                switchSession(chatSessions.first().id)
+            }
         }
 
         observeAgentViewModelEvents()
@@ -289,6 +295,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 val drawerState = rememberDrawerState(DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
                 val viewModel: MainViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+                val isGuideRunning by viewModel.isGuideRunning.collectAsState()
                 val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
 
                 // Listen for error events and surface them with a Snackbar.
@@ -347,7 +354,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 messages = messages.toList(),
                                 inputText = inputText,
                                 isSending = isSending,
-                                isGuideRunning = viewModel.isGuideRunning.collectAsState().value,
+                                isGuideRunning = isGuideRunning,
                                 statusText = viewModel.statusText.collectAsState().value,
                                 readyPlan = readyPlan,
                                 candidateApps = candidateApps.toList(),
@@ -471,6 +478,33 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                     }
                                 }
 
+                                // Profile extraction opt-in (uploads conversation content; default off)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.settings_profile_extraction),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isProfileExtractionEnabled) Color(0xFF10A37F) else Color(0xFFE5E5E5))
+                                            .bouncyClickable { toggleProfileExtraction() }
+                                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(
+                                            text = if (isProfileExtractionEnabled) "On" else "Off",
+                                            color = if (isProfileExtractionEnabled) Color.White else Color(0xFF6B6B80),
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                    }
+                                }
+
                                 // Voice input
                                 Row(
                                         modifier = Modifier
@@ -534,8 +568,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                         confirmButton = {
                             TextButton(onClick = {
                                 chatSessions.clear()
-                                ChatStorage.saveSessions(this@MainActivity, emptyList())
-                                UserProfileStore.clearProfile(this@MainActivity)
+                                // Clears Room, SharedPreferences sessions, and the user profile.
+                                mainViewModel.clearAllData()
                                 startNewSession()
                                 showClearConfirm = false
                             }) { Text(stringResource(R.string.action_confirm_clear), color = Color(0xFFEF4444)) }
@@ -609,7 +643,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                     candidateApps.clear()
                     if (response.candidates.isNotEmpty()) {
                         candidateApps.addAll(response.candidates)
-                        statusText = "Please choose one app from the candidates"
+                        mainViewModel.setStatusText("Please choose one app from the candidates")
                     }
 
                     readyPlan = if (response.readyToStart) response else null
@@ -620,9 +654,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                             "HOMEWORK" -> "Homework assist"
                             else -> "General task"
                         }
-                        statusText = "Target confirmed: ${response.targetAppName} ($modeLabel), ready to start"
+                        mainViewModel.setStatusText("Target confirmed: ${response.targetAppName} ($modeLabel), ready to start")
                     } else if (response.candidates.isEmpty()) {
-                        statusText = "Please provide more task details"
+                        mainViewModel.setStatusText("Please provide more task details")
                     }
                     isSending = false
                     isTyping = false
@@ -696,26 +730,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
 
         pendingPlan = plan
-        statusText = "Ready to start. Please grant screen capture permission."
+        mainViewModel.setStatusText("Ready to start. Please grant screen capture permission.")
         projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
-    }
-
-    /**
-     * Start autonomous agent mode by delegating to the ViewModel, which survives config changes.
-     */
-    private fun startAgent(plan: GoalChatResult) {
-        mainViewModel.startAgent(plan)
-        try { AgentStopOverlayService.start(this) } catch (_: Exception) {}
-    }
-
-    private fun toTaskSpec(plan: GoalChatResult): TaskSpec {
-        return TaskSpec.fromRaw(
-            taskMode = plan.taskMode,
-            searchQuery = plan.searchQuery,
-            researchDepth = plan.researchDepth,
-            homeworkPolicy = plan.homeworkPolicy,
-            askOnUncertain = plan.askOnUncertain,
-        )
     }
 
     private fun observeAgentViewModelEvents() {
@@ -741,7 +757,6 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         isStoppingGuide = true
         try {
             mainViewModel.stopGuide()
-            isGuideRunning = false
             Toast.makeText(this, "Guide stopped", Toast.LENGTH_SHORT).show()
             finishSessionWithSummary()
         } finally {
@@ -751,7 +766,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private fun observeAgentStopRequests() {
         lifecycleScope.launch {
-            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            // CREATED (not STARTED): the floating stop button is tapped while the user is in
+            // another app, i.e. while this Activity is stopped, so the collector must stay active.
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.CREATED) {
                 AgentEventBus.stopRequests.collect {
                     stopGuide()
                 }
@@ -780,7 +797,16 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun createId(): String = "${System.currentTimeMillis()}_${(1000..9999).random()}"
+    private fun toggleProfileExtraction() {
+        isProfileExtractionEnabled = !isProfileExtractionEnabled
+        getSharedPreferences(SETTINGS_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_PROFILE_EXTRACTION_ENABLED, isProfileExtractionEnabled)
+            .apply()
+    }
+
+    /** Random UUID so LazyColumn keys never collide, even for ids generated in a tight loop. */
+    private fun createId(): String = UUID.randomUUID().toString()
 
     // ================================================================
     // Conversation session management
@@ -807,7 +833,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         readyPlan = null
         candidateApps.clear()
         mainViewModel.clearPendingInteractions()
-        statusText = "Please tell me your goal"
+        mainViewModel.setStatusText("Please tell me your goal")
     }
 
     private fun switchSession(sessionId: String) {
@@ -821,7 +847,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         readyPlan = null
         candidateApps.clear()
         mainViewModel.clearPendingInteractions()
-        statusText = if (session.summary.isNotBlank()) session.summary else "Conversation restored"
+        mainViewModel.setStatusText(if (session.summary.isNotBlank()) session.summary else "Conversation restored")
     }
 
     private fun saveCurrentSession() {
@@ -864,6 +890,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         session.title = title.trim().ifBlank { "New Chat" }
         session.isAutoTitle = false
         ChatStorage.saveSessions(this, chatSessions.toList())
+        mainViewModel.saveSessionToDb(session)
         // Trigger recompose
         val idx = chatSessions.indexOf(session)
         if (idx >= 0) {
@@ -876,6 +903,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         if (idx < 0) return
         chatSessions.removeAt(idx)
         ChatStorage.saveSessions(this, chatSessions.toList())
+        mainViewModel.deleteSessionFromDb(sessionId)
         if (sessionId == currentSessionId) {
             if (chatSessions.isNotEmpty()) {
                 switchSession(chatSessions.first().id)
@@ -890,6 +918,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         session.messages.clear()
         session.messages.addAll(messages.map { ChatMsg(it.role, it.content) })
 
+        // Snapshot the opt-in flag on the UI thread before hopping to the executor.
+        val allowProfileExtraction = isProfileExtractionEnabled
         ioExecutor.execute {
             // 1. Generate a summary
             val summary = ChatStorage.generateSummary(session.messages)
@@ -902,8 +932,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 session.title = title
             }
 
-            // 3. Extract user preferences
-            UserProfileStore.extractAndMerge(this@MainActivity, session.messages)
+            // 3. Extract user preferences. Opt-in only: extraction uploads conversation
+            // content to the AI backend, so it must never run when the toggle is off.
+            if (allowProfileExtraction) {
+                UserProfileStore.extractAndMerge(this@MainActivity, session.messages)
+            }
 
             // 4. Save
             ChatStorage.saveSessions(this@MainActivity, chatSessions.toList())
@@ -919,6 +952,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 }
             }
         }
+    }
+
+    companion object {
+        private const val SETTINGS_PREFS = "svate_settings"
+        private const val KEY_PROFILE_EXTRACTION_ENABLED = "profile_extraction_enabled"
     }
 }
 
@@ -1031,6 +1069,21 @@ private fun GuideScreen(
                 .height(1.dp)
                 .background(Color(0xFFEAECF0)),
         )
+
+        // ===== Status line (hidden while the agent phase banner already shows progress) =====
+        if (statusText.isNotBlank() && !(isAgentMode && agentPhaseText.isNotBlank())) {
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF8E8EA0),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFFF7F7F8).copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
 
         // ===== Agent status / confirmation prompt =====
         if (isAgentMode && agentPhaseText.isNotBlank()) {

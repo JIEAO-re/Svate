@@ -12,6 +12,11 @@ function resetEnv() {
   Object.assign(process.env, ORIGINAL_ENV);
 }
 
+// process.env.NODE_ENV is typed read-only in Next.js; tests need to override it.
+function setNodeEnv(value: string) {
+  (process.env as Record<string, string | undefined>).NODE_ENV = value;
+}
+
 describe("internal route auth and signed uploads", () => {
   beforeEach(() => {
     resetEnv();
@@ -26,7 +31,7 @@ describe("internal route auth and signed uploads", () => {
   });
 
   it("rejects internal gemini route when token is missing and bypass is off", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.INTERNAL_DEV_BYPASS = "false";
     delete process.env.INTERNAL_JOB_TOKEN;
 
@@ -45,16 +50,55 @@ describe("internal route auth and signed uploads", () => {
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       error: "unauthorized_internal_job",
-      details: "internal_job_token_not_configured",
+      details: {
+        internal_auth: "internal_job_token_not_configured",
+        device_auth: "missing_auth_credentials",
+      },
+    });
+  });
+
+  it("allows gemini route through device auth without the internal token", async () => {
+    // Loopback dev bypass goes through authenticateRequest (the device auth
+    // path), proving the route no longer requires the internal job secret.
+    setNodeEnv("development");
+    process.env.INTERNAL_DEV_BYPASS = "false";
+    process.env.SKIP_AUTH_DEV = "true";
+    delete process.env.INTERNAL_JOB_TOKEN;
+    process.env.GEMINI_API_KEY = "test-key";
+
+    vi.doMock("@/lib/mobile-agent/genai-client", () => ({
+      getGenAIClient: () => ({
+        models: {
+          generateContent: vi.fn().mockResolvedValue({ text: "{\"ok\":true}" }),
+        },
+      }),
+    }));
+
+    const { POST } = await import("@/app/api/mobile-agent/internal/gemini-json/route");
+    const response = await POST(
+      new Request("http://localhost/api/mobile-agent/internal/gemini-json", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ prompt: "hello" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      json: { ok: true },
     });
   });
 
   it("rejects session recap route when token is wrong", async () => {
-    process.env.NODE_ENV = "production";
+    setNodeEnv("production");
     process.env.INTERNAL_JOB_TOKEN = "expected-secret";
 
     vi.doMock("@/lib/mobile-agent/session-recap-video", () => ({
       processSessionRecapVideoJob: vi.fn().mockResolvedValue(undefined),
+      processSessionRecapPollJob: vi.fn().mockResolvedValue(undefined),
     }));
 
     const { POST } = await import("@/app/api/mobile-agent/internal/session-recap-video/route");
@@ -83,7 +127,7 @@ describe("internal route auth and signed uploads", () => {
   });
 
   it("allows gemini route through local dev bypass", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.INTERNAL_DEV_BYPASS = "true";
     delete process.env.INTERNAL_JOB_TOKEN;
     process.env.GEMINI_API_KEY = "test-key";
@@ -116,7 +160,7 @@ describe("internal route auth and signed uploads", () => {
   });
 
   it("rejects dev bypass from non-local sources", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.INTERNAL_DEV_BYPASS = "true";
     delete process.env.INTERNAL_JOB_TOKEN;
 
@@ -136,7 +180,7 @@ describe("internal route auth and signed uploads", () => {
   });
 
   it("allows session recap route through local dev bypass", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.INTERNAL_DEV_BYPASS = "true";
     delete process.env.INTERNAL_JOB_TOKEN;
 
@@ -144,6 +188,7 @@ describe("internal route auth and signed uploads", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.doMock("@/lib/mobile-agent/session-recap-video", () => ({
       processSessionRecapVideoJob,
+      processSessionRecapPollJob: vi.fn().mockResolvedValue(undefined),
     }));
 
     const { POST } = await import("@/app/api/mobile-agent/internal/session-recap-video/route");
@@ -166,8 +211,76 @@ describe("internal route auth and signed uploads", () => {
     expect(processSessionRecapVideoJob).toHaveBeenCalledOnce();
   });
 
+  it("dispatches poll payloads to the poll handler", async () => {
+    setNodeEnv("development");
+    process.env.INTERNAL_DEV_BYPASS = "true";
+    delete process.env.INTERNAL_JOB_TOKEN;
+
+    const processSessionRecapVideoJob = vi.fn().mockResolvedValue(undefined);
+    const processSessionRecapPollJob = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.doMock("@/lib/mobile-agent/session-recap-video", () => ({
+      processSessionRecapVideoJob,
+      processSessionRecapPollJob,
+    }));
+
+    const { POST } = await import("@/app/api/mobile-agent/internal/session-recap-video/route");
+    const response = await POST(
+      new Request("http://localhost/api/mobile-agent/internal/session-recap-video", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          job_id: "job_1",
+          session_id: "sess_1",
+          trace_id: "trace_1",
+          goal: "finish",
+          action: "poll",
+          operation_name: "operations/video_op_1",
+          attempt: 2,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(processSessionRecapPollJob).toHaveBeenCalledOnce();
+    expect(processSessionRecapVideoJob).not.toHaveBeenCalled();
+  });
+
+  it("rejects poll payloads without operation_name", async () => {
+    setNodeEnv("development");
+    process.env.INTERNAL_DEV_BYPASS = "true";
+    delete process.env.INTERNAL_JOB_TOKEN;
+
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.doMock("@/lib/mobile-agent/session-recap-video", () => ({
+      processSessionRecapVideoJob: vi.fn().mockResolvedValue(undefined),
+      processSessionRecapPollJob: vi.fn().mockResolvedValue(undefined),
+    }));
+
+    const { POST } = await import("@/app/api/mobile-agent/internal/session-recap-video/route");
+    const response = await POST(
+      new Request("http://localhost/api/mobile-agent/internal/session-recap-video", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          job_id: "job_1",
+          session_id: "sess_1",
+          trace_id: "trace_1",
+          goal: "finish",
+          action: "poll",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+  });
+
   it("rejects signed-url requests without auth", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.SKIP_AUTH_DEV = "false";
     process.env.SCREENSHOT_UPLOAD_BUCKET = "shots-dev";
 
@@ -186,7 +299,7 @@ describe("internal route auth and signed uploads", () => {
   });
 
   it("rejects invalid signed-url content types", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.SKIP_AUTH_DEV = "true";
     process.env.SCREENSHOT_UPLOAD_BUCKET = "shots-dev";
 
@@ -208,8 +321,35 @@ describe("internal route auth and signed uploads", () => {
     });
   });
 
+  it("rejects signed-url identifiers with path separators", async () => {
+    setNodeEnv("development");
+    process.env.SKIP_AUTH_DEV = "true";
+    process.env.SCREENSHOT_UPLOAD_BUCKET = "shots-dev";
+
+    const { POST } = await import("@/app/api/gcs/signed-url/route");
+    const response = await POST(
+      new Request("http://localhost/api/gcs/signed-url", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          content_type: "image/jpeg",
+          session_id: "../escape",
+          trace_id: "trace/../../other",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: "invalid_signed_url_request",
+    });
+  });
+
   it("generates a signed upload target", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.SKIP_AUTH_DEV = "true";
     process.env.SCREENSHOT_UPLOAD_BUCKET = "shots-dev";
 

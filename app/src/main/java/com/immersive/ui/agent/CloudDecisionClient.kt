@@ -35,7 +35,38 @@ data class SomMarkerPayload(
     val clickable: Boolean,
     val editable: Boolean,
     val scrollable: Boolean,
-)
+) {
+    // Array fields need content-based equality; the generated implementation
+    // would compare bounds by reference.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is SomMarkerPayload) return false
+        return id == other.id &&
+            text == other.text &&
+            contentDesc == other.contentDesc &&
+            resourceId == other.resourceId &&
+            className == other.className &&
+            packageName == other.packageName &&
+            bounds.contentEquals(other.bounds) &&
+            clickable == other.clickable &&
+            editable == other.editable &&
+            scrollable == other.scrollable
+    }
+
+    override fun hashCode(): Int {
+        var result = id
+        result = 31 * result + text.hashCode()
+        result = 31 * result + contentDesc.hashCode()
+        result = 31 * result + resourceId.hashCode()
+        result = 31 * result + className.hashCode()
+        result = 31 * result + packageName.hashCode()
+        result = 31 * result + bounds.contentHashCode()
+        result = 31 * result + clickable.hashCode()
+        result = 31 * result + editable.hashCode()
+        result = 31 * result + scrollable.hashCode()
+        return result
+    }
+}
 
 data class UiNodeStatsPayload(
     val rawCount: Int,
@@ -71,6 +102,7 @@ class CloudDecisionClient {
         }
 
         val url = URL("$baseUrl/api/mobile-agent/next-step")
+        requireSecureBaseUrl(url)
         val payload = buildRequestPayload(
             ctx = ctx,
             uiNodes = uiNodes,
@@ -95,50 +127,73 @@ class CloudDecisionClient {
                 setRequestProperty("Authorization", "Bearer $authToken")
             }
         }
-        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
-            writer.write(payload.toString())
+        try {
+            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+                writer.write(payload.toString())
+            }
+
+            val code = connection.responseCode
+            // errorStream may be null (e.g. when the connection failed before
+            // a response body was produced), so read it defensively.
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
+            if (code !in 200..299) {
+                throw IllegalStateException("cloud next-step failed: HTTP $code | $body")
+            }
+
+            val root = JSONObject(body)
+            if (!root.optBoolean("success", false)) {
+                throw IllegalStateException("cloud next-step returned success=false: $body")
+            }
+
+            val checkpointObj = root.optJSONObject("checkpoint") ?: JSONObject()
+            val checkpoint = CloudCheckpoint(
+                expectedPackage = checkpointObj.optString("expected_package", ""),
+                expectedPageType = checkpointObj.optString("expected_page_type", ""),
+                expectedElements = parseStringArray(checkpointObj.optJSONArray("expected_elements")),
+            )
+            val reviewerObj = root.optJSONObject("reviewer") ?: JSONObject()
+            val reviewerVerdict = reviewerObj.optString("verdict", "")
+            val reviewerReason = reviewerObj.optString("reason", "")
+            val finalActionObj = root.optJSONObject("final_action")
+                ?: throw IllegalStateException("missing final_action in response")
+            val action = parseAction(finalActionObj, reviewerReason, checkpoint)
+
+            val plannerLatency = root.optJSONObject("planner")?.optInt("latency_ms", 0) ?: 0
+            val reviewerLatency = reviewerObj.optInt("latency_ms", 0)
+            val blockReason = root.optJSONObject("guard")
+                ?.optString("block_reason", "")
+                ?.takeIf { it.isNotBlank() }
+
+            return CloudDecisionResult(
+                traceId = root.optString("trace_id", ""),
+                action = action,
+                checkpoint = checkpoint,
+                reviewerVerdict = reviewerVerdict,
+                plannerLatencyMs = plannerLatency,
+                reviewerLatencyMs = reviewerLatency,
+                blockReason = blockReason,
+            )
+        } finally {
+            connection.disconnect()
         }
+    }
 
-        val code = connection.responseCode
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val body = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
-        if (code !in 200..299) {
-            throw IllegalStateException("cloud next-step failed: HTTP $code | $body")
+    /**
+     * Reject plain-http endpoints except for emulator/loopback debug hosts,
+     * so auth tokens and screen content are never sent in cleartext to a
+     * production server.
+     */
+    private fun requireSecureBaseUrl(url: URL) {
+        if (url.protocol.equals("https", ignoreCase = true)) return
+        val host = url.host.orEmpty().lowercase()
+        val isDebugLoopbackHost = host == "10.0.2.2" || host == "localhost" || host == "127.0.0.1"
+        if (!isDebugLoopbackHost) {
+            throw IllegalStateException(
+                "MOBILE_AGENT_BASE_URL must use https; plain http is only allowed " +
+                    "for emulator debug hosts (10.0.2.2/localhost/127.0.0.1), got: $baseUrl",
+            )
         }
-
-        val root = JSONObject(body)
-        if (!root.optBoolean("success", false)) {
-            throw IllegalStateException("cloud next-step returned success=false: $body")
-        }
-
-        val checkpointObj = root.optJSONObject("checkpoint") ?: JSONObject()
-        val checkpoint = CloudCheckpoint(
-            expectedPackage = checkpointObj.optString("expected_package", ""),
-            expectedPageType = checkpointObj.optString("expected_page_type", ""),
-            expectedElements = parseStringArray(checkpointObj.optJSONArray("expected_elements")),
-        )
-        val reviewerObj = root.optJSONObject("reviewer") ?: JSONObject()
-        val reviewerVerdict = reviewerObj.optString("verdict", "")
-        val reviewerReason = reviewerObj.optString("reason", "")
-        val finalActionObj = root.optJSONObject("final_action")
-            ?: throw IllegalStateException("missing final_action in response")
-        val action = parseAction(finalActionObj, reviewerReason, checkpoint)
-
-        val plannerLatency = root.optJSONObject("planner")?.optInt("latency_ms", 0) ?: 0
-        val reviewerLatency = reviewerObj.optInt("latency_ms", 0)
-        val blockReason = root.optJSONObject("guard")
-            ?.optString("block_reason", "")
-            ?.takeIf { it.isNotBlank() }
-
-        return CloudDecisionResult(
-            traceId = root.optString("trace_id", ""),
-            action = action,
-            checkpoint = checkpoint,
-            reviewerVerdict = reviewerVerdict,
-            plannerLatencyMs = plannerLatency,
-            reviewerLatencyMs = reviewerLatency,
-            blockReason = blockReason,
-        )
     }
 
     private fun buildRequestPayload(

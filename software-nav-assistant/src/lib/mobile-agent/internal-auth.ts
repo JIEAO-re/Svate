@@ -1,9 +1,21 @@
+import { createHash, timingSafeEqual } from "crypto";
 import {
   INTERNAL_DEV_BYPASS,
   INTERNAL_JOB_TOKEN,
   NODE_ENV,
 } from "@/lib/mobile-agent/env";
 import { getRequestSource, isLoopbackRequest } from "@/lib/mobile-agent/auth-utils";
+
+/**
+ * Constant-time string comparison. Hashing both inputs first keeps the
+ * comparison constant-time even when the lengths differ, so neither token
+ * length nor content leaks through timing.
+ */
+function safeTokenEqual(provided: string, expected: string): boolean {
+  const providedDigest = createHash("sha256").update(provided).digest();
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(providedDigest, expectedDigest);
+}
 
 export type InternalAuthResult = {
   valid: boolean;
@@ -22,7 +34,7 @@ export function verifyInternalJobAuth(
     || req.headers.get("Authorization")?.trim()
     || "";
 
-  if (INTERNAL_JOB_TOKEN && authHeader === `Bearer ${INTERNAL_JOB_TOKEN}`) {
+  if (INTERNAL_JOB_TOKEN && safeTokenEqual(authHeader, `Bearer ${INTERNAL_JOB_TOKEN}`)) {
     return {
       valid: true,
       bypassed: false,

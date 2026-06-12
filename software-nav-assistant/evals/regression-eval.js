@@ -2,10 +2,15 @@ const fs = require("fs");
 const path = require("path");
 
 const root = process.cwd();
-const baselinePath = process.env.BASELINE_RESULTS_PATH ||
-  path.join(root, "evals", "results", "sample-run.json");
-const candidatePath = process.env.CANDIDATE_RESULTS_PATH ||
-  path.join(root, "evals", "results", "sample-run.json");
+const baselinePath = path.resolve(
+  process.env.BASELINE_RESULTS_PATH ||
+    path.join(root, "evals", "results", "sample-run.json"),
+);
+const candidatePath = path.resolve(
+  process.env.CANDIDATE_RESULTS_PATH ||
+    path.join(root, "evals", "results", "sample-run.json"),
+);
+const allowSame = process.argv.includes("--allow-same");
 const maxDrop = 0.03; // 3pp
 
 function readJson(filePath) {
@@ -20,7 +25,29 @@ function toSuccessMap(result) {
   return map;
 }
 
+function assertDistinctInputs() {
+  if (baselinePath !== candidatePath) return;
+  if (!allowSame) {
+    console.error(
+      `[eval:regression] ERROR: baseline and candidate resolve to the same file: ${baselinePath}`,
+    );
+    console.error(
+      "[eval:regression] Comparing a run against itself can never detect a regression. " +
+        "Set BASELINE_RESULTS_PATH and CANDIDATE_RESULTS_PATH to different run outputs, " +
+        "or pass --allow-same to acknowledge this is a scaffold-only run.",
+    );
+    process.exit(1);
+  }
+  console.warn(
+    "[eval:regression] SCAFFOLD WARNING: baseline and candidate are the same file " +
+      "(--allow-same). This run only validates the gate wiring; it does NOT measure " +
+      "real model regressions.",
+  );
+}
+
 function evaluateRegression() {
+  assertDistinctInputs();
+
   const baseline = toSuccessMap(readJson(baselinePath));
   const candidate = toSuccessMap(readJson(candidatePath));
 

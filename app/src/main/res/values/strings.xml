@@ -6,4 +6,5 @@
     <string name="action_done">完成</string>
     <string name="action_confirm">确认</string>
     <string name="action_confirm_clear">确认清除</string>
+    <string name="settings_profile_extraction">允许 AI 记住我的偏好（会上传对话用于提取）</string>
 </resources>

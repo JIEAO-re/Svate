@@ -98,6 +98,31 @@ data class ActionSelector(
             nodeSignature.isNotBlank() ||
             (boundsHint != null && boundsHint.size == 4)
     }
+
+    // Array fields need content-based equality; the generated implementation
+    // would compare boundsHint by reference.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ActionSelector) return false
+        return packageName == other.packageName &&
+            resourceId == other.resourceId &&
+            text == other.text &&
+            contentDesc == other.contentDesc &&
+            className == other.className &&
+            boundsHint.contentEquals(other.boundsHint) &&
+            nodeSignature == other.nodeSignature
+    }
+
+    override fun hashCode(): Int {
+        var result = packageName.hashCode()
+        result = 31 * result + resourceId.hashCode()
+        result = 31 * result + text.hashCode()
+        result = 31 * result + contentDesc.hashCode()
+        result = 31 * result + className.hashCode()
+        result = 31 * result + boundsHint.contentHashCode()
+        result = 31 * result + nodeSignature.hashCode()
+        return result
+    }
 }
 
 data class CapturedFrame(
@@ -118,6 +143,29 @@ data class CapturedFrame(
     }
 
     fun inlineImageBase64OrNull(): String? = inlineImageBase64
+
+    // Array fields need content-based equality; the generated implementation
+    // would compare imageBytes by reference.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is CapturedFrame) return false
+        return frameId == other.frameId &&
+            tsMs == other.tsMs &&
+            imageBase64 == other.imageBase64 &&
+            uiSignature == other.uiSignature &&
+            imageBytes.contentEquals(other.imageBytes) &&
+            gcsUri == other.gcsUri
+    }
+
+    override fun hashCode(): Int {
+        var result = frameId.hashCode()
+        result = 31 * result + tsMs.hashCode()
+        result = 31 * result + imageBase64.hashCode()
+        result = 31 * result + uiSignature.hashCode()
+        result = 31 * result + imageBytes.contentHashCode()
+        result = 31 * result + (gcsUri?.hashCode() ?: 0)
+        return result
+    }
 }
 
 data class IntentSpec(
@@ -197,6 +245,55 @@ data class AgentAction(
     /** Whether the action uses pure visual Spatial Grounding targeting. */
     fun usesSpatialGrounding(): Boolean {
         return spatialCoordinates != null && spatialCoordinates.size == 2
+    }
+
+    // Array fields need content-based equality; the generated implementation
+    // would compare targetBbox and spatialCoordinates by reference.
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is AgentAction) return false
+        return intent == other.intent &&
+            targetDesc == other.targetDesc &&
+            targetBbox.contentEquals(other.targetBbox) &&
+            targetSomId == other.targetSomId &&
+            spatialCoordinates.contentEquals(other.spatialCoordinates) &&
+            inputText == other.inputText &&
+            packageName == other.packageName &&
+            intentSpec == other.intentSpec &&
+            riskLevel == other.riskLevel &&
+            actionId == other.actionId &&
+            selector == other.selector &&
+            expectedPackage == other.expectedPackage &&
+            expectedPageType == other.expectedPageType &&
+            expectedElements == other.expectedElements &&
+            elderlyNarration == other.elderlyNarration &&
+            reasoning == other.reasoning &&
+            subStepCompleted == other.subStepCompleted &&
+            decisionRequest == other.decisionRequest &&
+            knowledgeCapture == other.knowledgeCapture
+    }
+
+    override fun hashCode(): Int {
+        var result = intent.hashCode()
+        result = 31 * result + targetDesc.hashCode()
+        result = 31 * result + targetBbox.contentHashCode()
+        result = 31 * result + (targetSomId ?: 0)
+        result = 31 * result + spatialCoordinates.contentHashCode()
+        result = 31 * result + (inputText?.hashCode() ?: 0)
+        result = 31 * result + (packageName?.hashCode() ?: 0)
+        result = 31 * result + (intentSpec?.hashCode() ?: 0)
+        result = 31 * result + riskLevel.hashCode()
+        result = 31 * result + actionId.hashCode()
+        result = 31 * result + (selector?.hashCode() ?: 0)
+        result = 31 * result + (expectedPackage?.hashCode() ?: 0)
+        result = 31 * result + (expectedPageType?.hashCode() ?: 0)
+        result = 31 * result + expectedElements.hashCode()
+        result = 31 * result + elderlyNarration.hashCode()
+        result = 31 * result + reasoning.hashCode()
+        result = 31 * result + subStepCompleted.hashCode()
+        result = 31 * result + (decisionRequest?.hashCode() ?: 0)
+        result = 31 * result + (knowledgeCapture?.hashCode() ?: 0)
+        return result
     }
 }
 
@@ -324,6 +421,22 @@ object AgentActionSafety {
         "\u6e05\u7a7a",   // 清空
     )
 
+    /**
+     * Precompiled matchers: English keywords use word-boundary regexes so short
+     * words like "pay" or "order" do not false-match inside "display" or
+     * "recorder"; Chinese keywords keep substring matching (no word boundaries
+     * in CJK text) and are stored with a null regex.
+     */
+    private val HARD_BLOCK_KEYWORD_MATCHERS: List<Pair<String, Regex?>> =
+        HARD_BLOCK_KEYWORDS.map { keyword ->
+            val regex = if (keyword.any { it.code > 127 }) {
+                null
+            } else {
+                Regex("\\b${Regex.escape(keyword)}\\b")
+            }
+            keyword to regex
+        }
+
     fun validateClickBbox(
         bbox: IntArray?,
         minBboxSide: Int = MIN_BBOX_SIDE,
@@ -347,15 +460,8 @@ object AgentActionSafety {
     fun containsHardBlockedKeyword(text: String?): Boolean {
         val normalized = text.orEmpty().lowercase()
         if (normalized.isBlank()) return false
-        val isSearchSubmit = (normalized.contains("submit") || normalized.contains("\u63d0\u4ea4")) &&
-            (normalized.contains("search") ||
-                normalized.contains("find") ||
-                normalized.contains("query") ||
-                normalized.contains("\u641c\u7d22") ||
-                normalized.contains("\u67e5\u627e"))
-        if (isSearchSubmit) return false
-        return HARD_BLOCK_KEYWORDS.any { keyword ->
-            normalized.contains(keyword.lowercase())
+        return HARD_BLOCK_KEYWORD_MATCHERS.any { (keyword, regex) ->
+            regex?.containsMatchIn(normalized) ?: normalized.contains(keyword)
         }
     }
 

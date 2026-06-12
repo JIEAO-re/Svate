@@ -29,6 +29,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
@@ -46,7 +47,8 @@ class AgentCaptureService : Service() {
     private var imageReader: ImageReader? = null
     private var screenWidth: Int = 0
     private var screenHeight: Int = 0
-    private var lastCaptureAtMs: Long = 0L
+    /** Last capture timestamp; CAS-updated so concurrent captures throttle correctly. */
+    private val lastCaptureAtMs = AtomicLong(0L)
     private val imageListenerHandler by lazy { Handler(Looper.getMainLooper()) }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -144,6 +146,22 @@ class AgentCaptureService : Service() {
      * so the main thread is never blocked and ANRs are avoided.
      */
     suspend fun captureBase64(): String? {
+        val bytes = captureJpegBytes() ?: return null
+        return Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    /**
+     * Capture the current screen and return raw JPEG bytes to avoid Base64 overhead.
+     * Used by direct-upload paths such as GCS.
+     */
+    suspend fun captureBytes(): ByteArray? = captureJpegBytes()
+
+    /**
+     * Shared capture pipeline behind captureBase64/captureBytes: acquire a
+     * frame, copy the pixels into a bitmap, then crop, scale, and JPEG-encode
+     * on the Default dispatcher. Returns null when no frame is available.
+     */
+    private suspend fun captureJpegBytes(): ByteArray? {
         val reader = imageReader ?: return null
         throttleCaptureIfNeeded()
 
@@ -177,132 +195,53 @@ class AgentCaptureService : Service() {
                 imgHeight,
                 Bitmap.Config.ARGB_8888,
             )
-            rawBitmap!!.copyPixelsFromBuffer(plane.buffer)
+            rawBitmap.copyPixelsFromBuffer(plane.buffer)
         } catch (t: Throwable) {
-            Log.e(TAG, "captureBase64: pixel copy failed", t)
+            Log.e(TAG, "captureJpegBytes: pixel copy failed", t)
             rawBitmap?.recycle()
-            image.close()
+            // The finally block closes the image; do not close it twice here.
             return null
         } finally {
             image.close()
         }
+        val sourceBitmap = rawBitmap ?: return null
 
         // Move heavy work (crop, scale, JPEG encode) to the Default dispatcher pool.
         return withContext(Dispatchers.Default) {
             var cropped: Bitmap? = null
             var scaled: Bitmap? = null
             try {
-                cropped = Bitmap.createBitmap(rawBitmap!!, 0, 0, imgWidth, imgHeight)
+                cropped = Bitmap.createBitmap(sourceBitmap, 0, 0, imgWidth, imgHeight)
 
                 val maxDim = 800
-                val scale = if (cropped!!.width >= cropped!!.height) {
-                    maxDim.toFloat() / cropped!!.width
+                val scale = if (cropped.width >= cropped.height) {
+                    maxDim.toFloat() / cropped.width
                 } else {
-                    maxDim.toFloat() / cropped!!.height
+                    maxDim.toFloat() / cropped.height
                 }.coerceAtMost(1f)
 
                 scaled = Bitmap.createScaledBitmap(
-                    cropped!!,
-                    (cropped!!.width * scale).roundToInt().coerceAtLeast(1),
-                    (cropped!!.height * scale).roundToInt().coerceAtLeast(1),
+                    cropped,
+                    (cropped.width * scale).roundToInt().coerceAtLeast(1),
+                    (cropped.height * scale).roundToInt().coerceAtLeast(1),
                     true,
                 )
 
                 // Pool ByteArrayOutputStream instances to reuse buffers and reduce GC pressure.
                 val output = getPooledBuffer()
-                scaled!!.compress(Bitmap.CompressFormat.JPEG, 70, output)
-                Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
-            } catch (t: Throwable) {
-                Log.e(TAG, "captureBase64: encode failed", t)
-                null
-            } finally {
-                if (scaled != null && scaled !== cropped && scaled !== rawBitmap) {
-                    scaled?.recycle()
-                }
-                if (cropped != null && cropped !== rawBitmap) {
-                    cropped?.recycle()
-                }
-                rawBitmap?.recycle()
-            }
-        }
-    }
-
-    /**
-     * Capture the current screen and return raw JPEG bytes to avoid Base64 overhead.
-     * Used by direct-upload paths such as GCS.
-     */
-    suspend fun captureBytes(): ByteArray? {
-        val reader = imageReader ?: return null
-        throttleCaptureIfNeeded()
-
-        var image: android.media.Image? = null
-        for (attempt in 1..MAX_ACQUIRE_RETRIES) {
-            image = awaitNextImage(reader, ACQUIRE_RETRY_DELAY_MS)
-            if (image != null) break
-            if (attempt < MAX_ACQUIRE_RETRIES) {
-                delay(ACQUIRE_RETRY_DELAY_MS)
-            }
-        }
-        if (image == null) {
-            Log.w(TAG, "captureBytes: acquireLatestImage returned null after $MAX_ACQUIRE_RETRIES attempts")
-            return null
-        }
-
-        val plane = image.planes[0]
-        val pixelStride = plane.pixelStride
-        val rowStride = plane.rowStride
-        val rowPadding = rowStride - pixelStride * image.width
-        val imgWidth = image.width
-        val imgHeight = image.height
-
-        var rawBitmap: Bitmap? = null
-        try {
-            rawBitmap = Bitmap.createBitmap(
-                imgWidth + rowPadding / pixelStride,
-                imgHeight,
-                Bitmap.Config.ARGB_8888,
-            )
-            rawBitmap!!.copyPixelsFromBuffer(plane.buffer)
-        } catch (t: Throwable) {
-            Log.e(TAG, "captureBytes: pixel copy failed", t)
-            rawBitmap?.recycle()
-            image.close()
-            return null
-        } finally {
-            image.close()
-        }
-
-        return withContext(Dispatchers.Default) {
-            var cropped: Bitmap? = null
-            var scaled: Bitmap? = null
-            try {
-                cropped = Bitmap.createBitmap(rawBitmap!!, 0, 0, imgWidth, imgHeight)
-                val maxDim = 800
-                val scale = if (cropped!!.width >= cropped!!.height) {
-                    maxDim.toFloat() / cropped!!.width
-                } else {
-                    maxDim.toFloat() / cropped!!.height
-                }.coerceAtMost(1f)
-                scaled = Bitmap.createScaledBitmap(
-                    cropped!!,
-                    (cropped!!.width * scale).roundToInt().coerceAtLeast(1),
-                    (cropped!!.height * scale).roundToInt().coerceAtLeast(1),
-                    true,
-                )
-                val output = getPooledBuffer()
-                scaled!!.compress(Bitmap.CompressFormat.JPEG, 70, output)
+                scaled.compress(Bitmap.CompressFormat.JPEG, 70, output)
                 output.toByteArray()
             } catch (t: Throwable) {
-                Log.e(TAG, "captureBytes: encode failed", t)
+                Log.e(TAG, "captureJpegBytes: encode failed", t)
                 null
             } finally {
-                if (scaled != null && scaled !== cropped && scaled !== rawBitmap) {
-                    scaled?.recycle()
+                if (scaled != null && scaled !== cropped && scaled !== sourceBitmap) {
+                    scaled.recycle()
                 }
-                if (cropped != null && cropped !== rawBitmap) {
-                    cropped?.recycle()
+                if (cropped != null && cropped !== sourceBitmap) {
+                    cropped.recycle()
                 }
-                rawBitmap?.recycle()
+                sourceBitmap.recycle()
             }
         }
     }
@@ -324,12 +263,17 @@ class AgentCaptureService : Service() {
     }
 
     private suspend fun throttleCaptureIfNeeded() {
-        val now = SystemClock.uptimeMillis()
-        val delta = now - lastCaptureAtMs
-        if (delta in 0 until MIN_CAPTURE_INTERVAL_MS) {
-            delay(MIN_CAPTURE_INTERVAL_MS - delta)
+        while (true) {
+            val last = lastCaptureAtMs.get()
+            val now = SystemClock.uptimeMillis()
+            val delta = now - last
+            if (delta in 0 until MIN_CAPTURE_INTERVAL_MS) {
+                delay(MIN_CAPTURE_INTERVAL_MS - delta)
+                continue
+            }
+            // CAS so two concurrent captures cannot both claim the same slot.
+            if (lastCaptureAtMs.compareAndSet(last, now)) return
         }
-        lastCaptureAtMs = SystemClock.uptimeMillis()
     }
 
     private suspend fun awaitNextImage(

@@ -26,6 +26,13 @@ export const REVIEWER_MODEL = process.env.REVIEWER_MODEL?.trim() || "gemini-2.5-
 export const GUIDE_IMAGE_MODEL = process.env.GUIDE_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image-preview";
 export const GUIDE_VIDEO_MODEL = process.env.GUIDE_VIDEO_MODEL?.trim() || "veo-2.0-generate-001";
 export const POSTGRES_URL = process.env.POSTGRES_URL?.trim() || process.env.DATABASE_URL?.trim() || "";
+export const DATABASE_SSL = process.env.DATABASE_SSL?.trim().toLowerCase() === "true";
+// Optional PEM-encoded CA certificate content used to verify the database server.
+export const DATABASE_SSL_CA = process.env.DATABASE_SSL_CA?.trim() || "";
+// Explicit opt-out of TLS certificate verification. Only for environments where
+// a proper CA chain is impossible; logs a loud warning when enabled.
+export const DATABASE_SSL_INSECURE =
+  process.env.DATABASE_SSL_INSECURE?.trim().toLowerCase() === "true";
 export const GUIDE_MEDIA_BUCKET = process.env.GUIDE_MEDIA_BUCKET?.trim() || "";
 export const LEGACY_GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME?.trim() || "";
 export const SCREENSHOT_UPLOAD_BUCKET =
@@ -40,7 +47,10 @@ export const INTERNAL_DEV_BYPASS =
   process.env.INTERNAL_DEV_BYPASS?.trim().toLowerCase() === "true";
 export const SKIP_AUTH_DEV = process.env.SKIP_AUTH_DEV?.trim().toLowerCase() === "true";
 export const ENABLE_LEGACY_DEMO = process.env.ENABLE_LEGACY_DEMO?.trim().toLowerCase() === "true";
-export const ENABLE_GUIDE_MEDIA = process.env.ENABLE_GUIDE_MEDIA?.trim().toLowerCase() !== "false";
+// Default off: generated guide media currently has no consumer on the client,
+// so keeping it enabled by default only burns image-generation quota. Set
+// ENABLE_GUIDE_MEDIA=true explicitly to turn it on.
+export const ENABLE_GUIDE_MEDIA = process.env.ENABLE_GUIDE_MEDIA?.trim().toLowerCase() === "true";
 export const ENABLE_SESSION_RECAP_VIDEO =
   process.env.ENABLE_SESSION_RECAP_VIDEO?.trim().toLowerCase() === "true";
 

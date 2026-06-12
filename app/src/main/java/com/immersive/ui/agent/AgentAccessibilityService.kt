@@ -371,32 +371,6 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Find and click a node containing the specified text from the UI tree.
-     */
-    fun performClickByText(text: String): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val nodes = root.findAccessibilityNodeInfosByText(text)
-        for (node in nodes) {
-            if (node.isClickable) {
-                val result = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (result) return true
-            }
-            // If the node itself is not clickable, try its parent instead.
-            var parent = node.parent
-            var depth = 0
-            while (parent != null && depth < 5) {
-                if (parent.isClickable) {
-                    val result = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    if (result) return true
-                }
-                parent = parent.parent
-                depth++
-            }
-        }
-        return false
-    }
-
-    /**
      * Execute a swipe gesture.
      */
     fun performSwipe(
@@ -426,15 +400,25 @@ class AgentAccessibilityService : AccessibilityService() {
             .addStroke(GestureDescription.StrokeDescription(path, 0, 400))
             .build()
 
-        dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                callback?.invoke(true)
-            }
+        try {
+            val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    callback?.invoke(true)
+                }
 
-            override fun onCancelled(gestureDescription: GestureDescription?) {
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    callback?.invoke(false)
+                }
+            }, null)
+            if (!dispatched) {
+                // Fail fast instead of letting the caller wait for a timeout.
+                Log.w(TAG, "performSwipe: dispatchGesture rejected by framework")
                 callback?.invoke(false)
             }
-        }, null)
+        } catch (t: Throwable) {
+            Log.e(TAG, "performSwipe failed", t)
+            callback?.invoke(false)
+        }
     }
 
     /**
@@ -458,6 +442,12 @@ class AgentAccessibilityService : AccessibilityService() {
 
     /**
      * Submit the current input by trying IME enter first, then search/go style buttons.
+     *
+     * Button fallback is intentionally strict: only directly clickable nodes whose
+     * trimmed text/contentDesc exactly equals a known submit label (ignoring case)
+     * are considered. No parent-climbing and no substring matching, so a stray
+     * "Go" inside "Google Pay" or a clickable ancestor wrapping a risky button
+     * can never be triggered.
      */
     fun performSubmitInput(): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -479,7 +469,38 @@ class AgentAccessibilityService : AccessibilityService() {
             "Enter",
         )
         for (text in submitTexts) {
-            if (performClickByText(text)) return true
+            if (performClickByExactText(text)) return true
+        }
+        return false
+    }
+
+    /**
+     * Click a clickable node whose trimmed text or contentDesc exactly equals
+     * [expected] (ignoring case). Candidates that carry any hard-blocked keyword
+     * are rejected. Returns false when no safe exact match is found.
+     */
+    fun performClickByExactText(expected: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val target = expected.trim()
+        if (target.isEmpty()) return false
+
+        val nodes = root.findAccessibilityNodeInfosByText(target) ?: return false
+        for (node in nodes) {
+            if (!node.isClickable) continue
+
+            val nodeText = node.text?.toString()?.trim().orEmpty()
+            val nodeDesc = node.contentDescription?.toString()?.trim().orEmpty()
+            val exactMatch = nodeText.equals(target, ignoreCase = true) ||
+                nodeDesc.equals(target, ignoreCase = true)
+            if (!exactMatch) continue
+
+            // Hard safety gate: never click candidates carrying blocked keywords.
+            if (AgentActionSafety.containsHardBlockedKeyword("$nodeText $nodeDesc")) {
+                Log.w(TAG, "performClickByExactText rejected blocked candidate: $nodeText")
+                continue
+            }
+
+            if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
         }
         return false
     }

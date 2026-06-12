@@ -55,6 +55,7 @@ Server:
 cd software-nav-assistant
 npm ci
 npm run lint
+npm run typecheck
 npm test
 npm run build
 ```

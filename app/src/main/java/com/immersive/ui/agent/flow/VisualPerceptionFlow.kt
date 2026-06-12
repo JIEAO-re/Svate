@@ -36,7 +36,8 @@ import kotlinx.coroutines.launch
  * Responsibilities:
  * - Sample frames at high frequency using reactive debounce instead of rigid waits
  * - Compute frame fingerprints for deduplication
- * - React quickly to local popups through PopupRecovery.fastDetectLocal
+ * - React quickly to local popups through PopupRecovery.detect (auto-dismiss
+ *   is restricted to safe popup types; permission dialogs are report-only)
  * - Render SoM overlays
  * - Prune the UI tree
  *
@@ -135,8 +136,13 @@ class VisualPerceptionFlow(
         val popup = PopupRecovery.detect(rawNodes)
         if (popup != null) {
             _popupDetected.tryEmit(PopupEvent(popup, rawNodes))
-            // Try to close the popup automatically.
-            if (PopupRecovery.dismiss(popup, rawNodes, service)) {
+            // Only safe popup types (ads/updates/crashes) with a rejection-semantics
+            // button may be auto-dismissed. Permission dialogs are report-only:
+            // the event above informs the orchestrator/user, and perception continues
+            // so the decision layer can see the dialog and wait for a human.
+            if (PopupRecovery.canAutoDismiss(popup) &&
+                PopupRecovery.dismiss(popup, rawNodes, service)
+            ) {
                 Log.d(TAG, "Popup auto-dismissed: ${popup.type}")
                 delay(300)
                 return
@@ -164,7 +170,7 @@ class VisualPerceptionFlow(
             imageBytes = frame.imageBytes,
         )
         if (fingerprint == lastFingerprint && config.enableDedup) {
-            return // 帧未变化，跳过
+            return // Frame unchanged, skip.
         }
         lastFingerprint = fingerprint
 

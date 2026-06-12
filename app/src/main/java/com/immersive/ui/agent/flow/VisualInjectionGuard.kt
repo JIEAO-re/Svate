@@ -1,13 +1,6 @@
 package com.immersive.ui.agent.flow
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.util.Base64
-import android.util.Log
 import com.immersive.ui.agent.UiNode
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.security.MessageDigest
 
 /**
  * P2 semantic guard: visual prompt injection defense.
@@ -18,10 +11,9 @@ import java.security.MessageDigest
  * - For example: fake system dialogs that lure the user into clicking
  *
  * Defense strategy:
- * 1. OCR text scanning to detect suspicious instruction text
- * 2. Visual fingerprint checks for spoofed system UI elements
- * 3. Layout anomaly detection for overlay attacks
- * 4. Trust-domain separation between system UI and app UI
+ * 1. Text scanning of UI nodes to detect suspicious instruction text
+ * 2. Layout anomaly detection for overlay attacks
+ * 3. Trust-domain separation between system UI and app UI
  *
  * Design principles:
  * - Favor false positives over misses when safety is at stake
@@ -32,10 +24,9 @@ class VisualInjectionGuard(
     private val config: InjectionGuardConfig = InjectionGuardConfig(),
 ) {
     companion object {
-        private const val TAG = "VisualInjectionGuard"
-
-        // ========== High-risk instruction keywords (multi-language) ==========
-        private val INJECTION_KEYWORDS_EN = listOf(
+        // ========== Injection command keywords (multi-language, HIGH severity) ==========
+        // Direct attempts to override agent instructions or rush an action.
+        private val INJECTION_COMMAND_KEYWORDS_EN = listOf(
             "ignore previous",
             "ignore all",
             "disregard",
@@ -48,15 +39,9 @@ class VisualInjectionGuard(
             "urgent action",
             "immediate transfer",
             "confirm now",
-            "system alert",
-            "security warning",
-            "your account",
-            "verify identity",
-            "enter password",
-            "enter pin",
         )
 
-        private val INJECTION_KEYWORDS_ZH = listOf(
+        private val INJECTION_COMMAND_KEYWORDS_ZH = listOf(
             "忽略之前",
             "忽略所有",
             "无视",
@@ -69,11 +54,26 @@ class VisualInjectionGuard(
             "紧急操作",
             "立即转账",
             "立即确认",
+        )
+
+        // ========== Sensitive-context keywords (MEDIUM severity) ==========
+        // Phrases that legitimately appear on login/security screens. They are
+        // not proof of an attack, so they only request user confirmation
+        // instead of hard-blocking the session.
+        private val SENSITIVE_CONTEXT_KEYWORDS_EN = listOf(
+            "system alert",
+            "security warning",
+            "your account",
+            "verify identity",
+            "enter password",
+            "enter pin",
+        )
+
+        private val SENSITIVE_CONTEXT_KEYWORDS_ZH = listOf(
             "系统警告",
             "安全警告",
             "您的账户",
             "验证身份",
-            "输入密码",
             "输入密码",
         )
 
@@ -108,45 +108,71 @@ class VisualInjectionGuard(
      * Scan screen content for potential visual injection attacks.
      *
      * @param uiNodes UI node tree for the current screen.
-     * @param screenshotBase64 Current screenshot, used to supplement OCR detection.
+     * @param screenshotBase64 Current screenshot. Currently unused (reserved for
+     *   a future OCR pass); kept in the signature so callers already forward it.
      * @param foregroundPackage Foreground app package name.
+     * @param screenWidth Real screen width in pixels; pass 0 when unknown and
+     *   the guard falls back to the maximum node bounds.
+     * @param screenHeight Real screen height in pixels; pass 0 when unknown.
      * @return Detection result containing threat level and detailed findings.
      */
-    suspend fun scan(
+    @Suppress("UNUSED_PARAMETER")
+    fun scan(
         uiNodes: List<UiNode>,
         screenshotBase64: String?,
         foregroundPackage: String?,
+        screenWidth: Int = 0,
+        screenHeight: Int = 0,
     ): InjectionScanResult {
         val threats = mutableListOf<DetectedThreat>()
 
+        // Resolve effective screen dimensions, falling back to node bounds.
+        val effectiveWidth = if (screenWidth > 0) {
+            screenWidth
+        } else {
+            uiNodes.maxOfOrNull { it.bounds.right } ?: 0
+        }
+        val effectiveHeight = if (screenHeight > 0) {
+            screenHeight
+        } else {
+            uiNodes.maxOfOrNull { it.bounds.bottom } ?: 0
+        }
+
         // 1. Scan UI node text.
-        val textThreats = scanUiNodeTexts(uiNodes)
-        threats.addAll(textThreats)
+        threats.addAll(scanUiNodeTexts(uiNodes))
 
         // 2. Detect overlay attacks.
-        val overlayThreats = detectOverlayAttack(uiNodes, foregroundPackage)
-        threats.addAll(overlayThreats)
+        if (config.enableOverlayDetection) {
+            threats.addAll(
+                detectOverlayAttack(uiNodes, foregroundPackage, effectiveWidth, effectiveHeight),
+            )
+        }
 
         // 3. Detect spoofed system UI.
-        val spoofThreats = detectSystemUiSpoof(uiNodes, foregroundPackage)
-        threats.addAll(spoofThreats)
+        if (config.enableSpoofDetection) {
+            threats.addAll(detectSystemUiSpoof(uiNodes))
+        }
 
         // 4. Detect sensitive-operation context.
-        val contextThreats = detectSensitiveContext(uiNodes)
-        threats.addAll(contextThreats)
+        threats.addAll(detectSensitiveContext(uiNodes))
+
+        // Keep the most severe findings within the report budget.
+        val reportedThreats = threats
+            .sortedByDescending { it.severity }
+            .take(config.maxThreatsToReport)
 
         // Compute the overall threat level.
         val threatLevel = when {
-            threats.any { it.severity == ThreatSeverity.CRITICAL } -> ThreatLevel.CRITICAL
-            threats.any { it.severity == ThreatSeverity.HIGH } -> ThreatLevel.HIGH
-            threats.any { it.severity == ThreatSeverity.MEDIUM } -> ThreatLevel.MEDIUM
-            threats.isNotEmpty() -> ThreatLevel.LOW
+            reportedThreats.any { it.severity == ThreatSeverity.CRITICAL } -> ThreatLevel.CRITICAL
+            reportedThreats.any { it.severity == ThreatSeverity.HIGH } -> ThreatLevel.HIGH
+            reportedThreats.any { it.severity == ThreatSeverity.MEDIUM } -> ThreatLevel.MEDIUM
+            reportedThreats.isNotEmpty() -> ThreatLevel.LOW
             else -> ThreatLevel.NONE
         }
 
         return InjectionScanResult(
             threatLevel = threatLevel,
-            threats = threats,
+            threats = reportedThreats,
             shouldBlock = threatLevel >= ThreatLevel.HIGH,
             requiresConfirmation = threatLevel >= ThreatLevel.MEDIUM,
             scanTimestampMs = System.currentTimeMillis(),
@@ -155,6 +181,10 @@ class VisualInjectionGuard(
 
     /**
      * Scan UI node text for injection keywords.
+     *
+     * Direct injection commands are HIGH severity (block); sensitive-context
+     * phrases such as "enter password" are MEDIUM severity because they also
+     * appear on legitimate login screens, so they only require confirmation.
      */
     private fun scanUiNodeTexts(uiNodes: List<UiNode>): List<DetectedThreat> {
         val threats = mutableListOf<DetectedThreat>()
@@ -162,8 +192,7 @@ class VisualInjectionGuard(
         for (node in uiNodes) {
             val combinedText = "${node.text} ${node.contentDesc}".lowercase()
 
-            // Detect English injection keywords.
-            for (keyword in INJECTION_KEYWORDS_EN) {
+            for (keyword in INJECTION_COMMAND_KEYWORDS_EN) {
                 if (combinedText.contains(keyword.lowercase())) {
                     threats.add(DetectedThreat(
                         type = ThreatType.INJECTION_KEYWORD,
@@ -175,13 +204,36 @@ class VisualInjectionGuard(
                 }
             }
 
-            // Detect Chinese injection keywords.
-            for (keyword in INJECTION_KEYWORDS_ZH) {
+            for (keyword in INJECTION_COMMAND_KEYWORDS_ZH) {
                 if (combinedText.contains(keyword)) {
                     threats.add(DetectedThreat(
                         type = ThreatType.INJECTION_KEYWORD,
                         severity = ThreatSeverity.HIGH,
-                        description = "检测到注入关键词: '$keyword'",
+                        description = "Detected injection keyword: '$keyword'",
+                        evidence = node.text.take(100),
+                        nodeSignature = buildNodeSignature(node),
+                    ))
+                }
+            }
+
+            for (keyword in SENSITIVE_CONTEXT_KEYWORDS_EN) {
+                if (combinedText.contains(keyword.lowercase())) {
+                    threats.add(DetectedThreat(
+                        type = ThreatType.SENSITIVE_CONTEXT,
+                        severity = ThreatSeverity.MEDIUM,
+                        description = "Detected sensitive-context phrase: '$keyword'",
+                        evidence = node.text.take(100),
+                        nodeSignature = buildNodeSignature(node),
+                    ))
+                }
+            }
+
+            for (keyword in SENSITIVE_CONTEXT_KEYWORDS_ZH) {
+                if (combinedText.contains(keyword)) {
+                    threats.add(DetectedThreat(
+                        type = ThreatType.SENSITIVE_CONTEXT,
+                        severity = ThreatSeverity.MEDIUM,
+                        description = "Detected sensitive-context phrase: '$keyword'",
                         evidence = node.text.take(100),
                         nodeSignature = buildNodeSignature(node),
                     ))
@@ -189,68 +241,63 @@ class VisualInjectionGuard(
             }
         }
 
-        return threats.distinctBy { it.evidence }
+        return threats.distinctBy { it.severity to it.evidence }
     }
 
     /**
      * Detect overlay attacks.
-     * Malicious apps may draw transparent overlays above other apps.
+     *
+     * Any interactive node from a package different from the foreground app
+     * (excluding system UI packages) is reported — a single overlay package is
+     * enough to warrant a warning. Full-screen overlays escalate to HIGH.
      */
     private fun detectOverlayAttack(
         uiNodes: List<UiNode>,
         foregroundPackage: String?,
+        screenWidth: Int,
+        screenHeight: Int,
     ): List<DetectedThreat> {
-        val threats = mutableListOf<DetectedThreat>()
+        // Without a trusted foreground package we cannot tell overlays apart.
+        if (foregroundPackage.isNullOrBlank()) return emptyList()
 
-        // Detect overlapping clickable elements from different packages.
-        val clickableNodes = uiNodes.filter { it.isClickable }
-        val packageGroups = clickableNodes.groupBy { it.packageName }
-
-        if (packageGroups.size > 2 && foregroundPackage != null) {
-            // Exclude system UI packages.
-            val nonSystemPackages = packageGroups.keys.filter { pkg ->
-                pkg != foregroundPackage && !SYSTEM_UI_PACKAGES.contains(pkg)
-            }
-
-            if (nonSystemPackages.isNotEmpty()) {
-                threats.add(DetectedThreat(
-                    type = ThreatType.OVERLAY_ATTACK,
-                    severity = ThreatSeverity.MEDIUM,
-                    description = "Detected potential overlay from: ${nonSystemPackages.joinToString()}",
-                    evidence = "Multiple package clickable elements detected",
-                    nodeSignature = "",
-                ))
-            }
+        val overlayNodes = uiNodes.filter { node ->
+            node.isClickable &&
+                node.packageName.isNotBlank() &&
+                node.packageName != foregroundPackage &&
+                !SYSTEM_UI_PACKAGES.contains(node.packageName)
         }
+        if (overlayNodes.isEmpty()) return emptyList()
 
-        // Detect fullscreen transparent overlays.
-        for (node in uiNodes) {
-            if (node.packageName != foregroundPackage &&
-                !SYSTEM_UI_PACKAGES.contains(node.packageName) &&
-                isFullScreenNode(node) &&
-                node.isClickable
-            ) {
-                threats.add(DetectedThreat(
-                    type = ThreatType.OVERLAY_ATTACK,
-                    severity = ThreatSeverity.HIGH,
-                    description = "Detected full-screen overlay from: ${node.packageName}",
-                    evidence = "Full-screen clickable element from different package",
-                    nodeSignature = buildNodeSignature(node),
-                ))
+        // Report one threat per overlay package; escalate when any node covers the screen.
+        return overlayNodes
+            .groupBy { it.packageName }
+            .map { (pkg, nodes) ->
+                val fullScreenNode = nodes.firstOrNull { isFullScreenNode(it, screenWidth, screenHeight) }
+                if (fullScreenNode != null) {
+                    DetectedThreat(
+                        type = ThreatType.OVERLAY_ATTACK,
+                        severity = ThreatSeverity.HIGH,
+                        description = "Detected full-screen overlay from: $pkg",
+                        evidence = "Full-screen clickable element from different package",
+                        nodeSignature = buildNodeSignature(fullScreenNode),
+                    )
+                } else {
+                    DetectedThreat(
+                        type = ThreatType.OVERLAY_ATTACK,
+                        severity = ThreatSeverity.MEDIUM,
+                        description = "Detected potential overlay from: $pkg",
+                        evidence = "Interactive element from non-foreground package",
+                        nodeSignature = buildNodeSignature(nodes.first()),
+                    )
+                }
             }
-        }
-
-        return threats
     }
 
     /**
      * Detect spoofed system UI.
      * Malicious apps may imitate system dialog styles.
      */
-    private fun detectSystemUiSpoof(
-        uiNodes: List<UiNode>,
-        foregroundPackage: String?,
-    ): List<DetectedThreat> {
+    private fun detectSystemUiSpoof(uiNodes: List<UiNode>): List<DetectedThreat> {
         val threats = mutableListOf<DetectedThreat>()
 
         // System-dialog keywords
@@ -325,12 +372,17 @@ class VisualInjectionGuard(
         return threats
     }
 
-    private fun isFullScreenNode(node: UiNode): Boolean {
+    /**
+     * A node is considered full-screen when it covers more than 90% of the
+     * width and 80% of the height of the real screen. Returns false when the
+     * screen dimensions are unknown.
+     */
+    private fun isFullScreenNode(node: UiNode, screenWidth: Int, screenHeight: Int): Boolean {
+        if (screenWidth <= 0 || screenHeight <= 0) return false
         val bounds = node.bounds
         val width = bounds.right - bounds.left
         val height = bounds.bottom - bounds.top
-        // Assume fullscreen if width > 90% and height > 80%.
-        return width > 900 && height > 1600
+        return width >= screenWidth * 0.9f && height >= screenHeight * 0.8f
     }
 
     private fun buildNodeSignature(node: UiNode): String {
@@ -341,9 +393,9 @@ class VisualInjectionGuard(
 // ========== Data classes ==========
 
 data class InjectionGuardConfig(
-    val enableOcrScan: Boolean = false, // OCR 扫描（需要 ML Kit）
     val enableOverlayDetection: Boolean = true,
     val enableSpoofDetection: Boolean = true,
+    /** Cap on reported threats; the most severe findings are kept. */
     val maxThreatsToReport: Int = 10,
 )
 
@@ -360,7 +412,6 @@ enum class ThreatType {
     OVERLAY_ATTACK,
     SYSTEM_UI_SPOOF,
     SENSITIVE_CONTEXT,
-    OCR_DETECTED_INJECTION,
 }
 
 enum class ThreatSeverity {

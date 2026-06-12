@@ -12,6 +12,11 @@ import {
 export type ArbiterResult = {
   finalAction: ActionCommand;
   blockReason: string | null;
+  /**
+   * Traceability marker surfaced in guard output when the arbiter substitutes
+   * a heuristic action for the planner output (null otherwise).
+   */
+  notes: string | null;
 };
 
 // ============================================================================
@@ -407,6 +412,7 @@ export function arbitrateDecision(
     return {
       finalAction: buildWaitAction("escalated_by_reviewer", "HIGH"),
       blockReason: reviewer.reason || "escalated_by_reviewer",
+      notes: null,
     };
   }
 
@@ -417,12 +423,14 @@ export function arbitrateDecision(
       return {
         finalAction: buildWaitAction("invalid_approved_index"),
         blockReason: "invalid_approved_index",
+        notes: null,
       };
     }
     if (approved.risk_level === "HIGH") {
       return {
         finalAction: buildWaitAction("high_risk_blocked", "HIGH"),
         blockReason: "high_risk_blocked",
+        notes: null,
       };
     }
     const openIntentIssue = validateOpenIntentAction(request, approved);
@@ -430,34 +438,41 @@ export function arbitrateDecision(
       return {
         finalAction: buildWaitAction(openIntentIssue),
         blockReason: openIntentIssue,
+        notes: null,
       };
     }
     const searchGuard = validateSearchAction(request, approved);
     if (searchGuard) {
       const recovery = buildSearchRecoveryAction(request, searchGuard);
       if (recovery) {
+        // Mark heuristic substitutions so downstream analysis can tell them
+        // apart from planner-approved actions.
         return {
           finalAction: clampActionBbox(recovery),
           blockReason: null,
+          notes: "search_recovery_heuristic",
         };
       }
       return {
         finalAction: buildWaitAction(searchGuard),
         blockReason: searchGuard,
+        notes: null,
       };
     }
-    return { finalAction: clampActionBbox(approved), blockReason: null };
+    return { finalAction: clampActionBbox(approved), blockReason: null, notes: null };
   }
 
   if (replanExhausted) {
     return {
       finalAction: buildWaitAction("replan_exhausted_manual_required"),
       blockReason: "replan_exhausted_manual_required",
+      notes: null,
     };
   }
 
   return {
     finalAction: buildWaitAction("replan_requested"),
     blockReason: "replan_requested",
+    notes: null,
   };
 }

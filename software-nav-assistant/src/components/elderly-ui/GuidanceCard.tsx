@@ -6,7 +6,7 @@ import { SessionState, UserFeedback } from "@/lib/schemas/state-machine";
 import { AlertTriangle, EyeOff, Rewind, RefreshCw, CheckCircle } from "lucide-react";
 
 export function GuidanceCard() {
-  const { context, currentDecision, isLoading, triggerUserFeedback, resetSession } = useTaskContext();
+  const { context, currentTurn, isLoading, triggerUserFeedback, resetSession } = useTaskContext();
 
   // Scenario 1: initial waiting state
   if (context.state === SessionState.IDLE && !isLoading) {
@@ -19,7 +19,7 @@ export function GuidanceCard() {
   }
 
   // Scenario 2: high-risk hard stop with strong visual emphasis for the demo
-  if (context.state === SessionState.RISK_PAUSED || currentDecision?.next_step?.risk_level === "HIGH") {
+  if (context.state === SessionState.RISK_PAUSED || currentTurn?.final_action.risk_level === "HIGH") {
     return (
       <div className="bg-red-50 p-6 rounded-3xl shadow-2xl border-4 border-red-500 mt-6 animate-in slide-in-from-bottom-4">
         <div className="flex items-center gap-3 mb-4">
@@ -27,7 +27,7 @@ export function GuidanceCard() {
           <h2 className="text-3xl font-black text-red-700">危险！请停止</h2>
         </div>
         <p className="text-2xl text-red-900 leading-snug font-bold mb-6 bg-red-100 p-4 rounded-xl">
-          {currentDecision?.next_step?.elderly_instruction ||
+          {currentTurn?.final_action.narration ||
            "当前页面涉及资金或重要隐私。为了保护您的安全，向导已暂停。"}
         </p>
         <button
@@ -58,7 +58,7 @@ export function GuidanceCard() {
   return (
     <div className={`p-6 rounded-3xl shadow-xl mt-6 flex flex-col gap-6 transition-colors duration-500 border-4 ${isRecovering ? 'bg-amber-50 border-amber-300' : 'bg-white border-blue-100'}`}>
 
-      {/* 步骤提示器 */}
+      {/* Step indicator */}
       <div className="flex items-center justify-between text-slate-500 font-bold text-lg">
         {isRecovering ? (
            <span className="bg-amber-200 text-amber-900 px-4 py-1.5 rounded-full">💡 别着急，咱们慢慢找</span>
@@ -67,14 +67,14 @@ export function GuidanceCard() {
         )}
       </div>
 
-      {/* 🌟 右脑区域：大白话主指令 */}
+      {/* 🌟 Main plain-language instruction */}
       <div className={`min-h-[100px] transition-opacity duration-300 ${isLoading ? 'opacity-30' : 'opacity-100'}`}>
         <p className={`text-[2rem] leading-snug font-black tracking-wide ${isRecovering ? 'text-amber-900' : 'text-slate-900'}`}>
-          “{isLoading ? "小助手正在看..." : (currentDecision?.next_step?.elderly_instruction || "等待指令...")}”
+          “{isLoading ? "小助手正在看..." : (currentTurn?.final_action.narration || "等待指令...")}”
         </p>
       </div>
 
-      {/* 🛡️ 左脑区域：长辈防身反馈按键 (仅在明确等待点击时出现) */}
+      {/* 🛡️ Quick safety feedback buttons for the elderly user (only while waiting for them to act) */}
       {(context.state === SessionState.WAITING_USER || context.state === SessionState.RECOVERING) && !isLoading && (
         <div className="pt-6 border-t-2 border-slate-100">
           <p className="text-slate-400 text-lg font-bold mb-4">如果遇到困难，点这里告诉我：</p>
@@ -104,7 +104,7 @@ export function GuidanceCard() {
         </div>
       )}
 
-      {/* 容错纠偏机制：连续找不到，系统提示求助家人 */}
+      {/* Fault-tolerance hint: after repeated failures, suggest asking family for help */}
       {context.retry_count >= 2 && (
         <div className="text-center mt-2 px-4 py-3 bg-orange-100 text-orange-800 rounded-xl text-lg font-bold">
           💡 没关系，如果您一直找不到，建议晚点让家人帮您看看。

@@ -48,20 +48,39 @@ function fireAndForgetGuideMedia(params: {
     });
 }
 
+// Time budget for a single pipeline run. When the planner+reviewer pass has
+// already consumed this much wall-clock time, skip the REPLAN retry and go
+// straight to arbitration so the route does not exceed its execution window.
+const REPLAN_TIME_BUDGET_MS = Number(process.env.REPLAN_TIME_BUDGET_MS || 20_000);
+
 export async function runMobileAgentPipeline(
   request: NextStepRequest,
 ): Promise<NextStepResponse> {
   const traceId = randomUUID();
+  const startedAt = Date.now();
 
   let plannerRun = await runPlanner(request);
   let reviewerRun = await runReviewer(request, plannerRun.output.candidates);
   let replanExhausted = false;
+  let replanSkippedForBudget = false;
+  let usedLive = plannerRun.usedLive;
 
-  // REPLAN once.
+  // REPLAN once, unless the time budget is already exhausted.
   if (reviewerRun.output.verdict === "REPLAN") {
-    plannerRun = await runPlanner(request);
-    reviewerRun = await runReviewer(request, plannerRun.output.candidates);
-    replanExhausted = reviewerRun.output.verdict === "REPLAN";
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= REPLAN_TIME_BUDGET_MS) {
+      replanSkippedForBudget = true;
+      console.warn(
+        `[pipeline] skipping REPLAN: ${elapsedMs}ms elapsed exceeds the ${REPLAN_TIME_BUDGET_MS}ms budget`,
+      );
+    } else {
+      // Bypass frame dedup: the retry sees the same frames as the first pass,
+      // and dedup would otherwise collapse it into a WAIT.
+      plannerRun = await runPlanner(request, { bypassDedup: true });
+      reviewerRun = await runReviewer(request, plannerRun.output.candidates);
+      replanExhausted = reviewerRun.output.verdict === "REPLAN";
+      usedLive = usedLive || plannerRun.usedLive;
+    }
   }
 
   const arbiter = arbitrateDecision(
@@ -107,9 +126,10 @@ export async function runMobileAgentPipeline(
     guard: {
       risk_level: arbiter.finalAction.risk_level,
       block_reason: arbiter.blockReason,
+      notes: arbiter.notes,
     },
     live_runtime: {
-      used_live: true,
+      used_live: usedLive,
       model: plannerRun.model,
       connect_latency_ms: plannerRun.connectLatencyMs,
       inference_latency_ms: plannerRun.inferenceLatencyMs,
@@ -229,6 +249,8 @@ export async function runMobileAgentPipeline(
         reviewer_verdict: parsed.reviewer.verdict,
         final_intent: parsed.final_action.intent,
         replan_exhausted: replanExhausted,
+        replan_skipped_time_budget: replanSkippedForBudget,
+        used_live: usedLive,
       },
       ts: new Date().toISOString(),
     },

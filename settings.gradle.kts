@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "UI导航"
+rootProject.name = "Svate"
 include(":app")
  

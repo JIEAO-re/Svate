@@ -6,10 +6,17 @@ import {
   createScreenshotUploadTarget,
 } from "@/lib/mobile-agent/cloud-storage";
 
+// Identifiers are embedded into the GCS object path, so restrict them to a
+// safe character set (no slashes or dots) to prevent path injection.
+const SafePathSegmentSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_-]{1,128}$/, "must be 1-128 chars of [A-Za-z0-9_-]");
+
 const SignedUploadRequestSchema = z.object({
   content_type: z.enum(ALLOWED_SCREENSHOT_UPLOAD_CONTENT_TYPES),
-  session_id: z.string().trim().optional(),
-  trace_id: z.string().trim().optional(),
+  session_id: SafePathSegmentSchema.optional(),
+  trace_id: SafePathSegmentSchema.optional(),
   frame_index: z.number().int().min(0).optional(),
 });
 

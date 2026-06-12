@@ -9,6 +9,8 @@ This repository is validated with the following baseline:
 Validation commands:
 
 - `cmd /c npm run lint` from `software-nav-assistant`
+- `cmd /c npm run typecheck` from `software-nav-assistant`
+- `cmd /c npm run build` from `software-nav-assistant`
 - `cmd /c npm test` from `software-nav-assistant`
 - `./gradlew.bat test` from the repository root
 - `./gradlew.bat :app:assembleDebug` from the repository root

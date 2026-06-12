@@ -1,6 +1,5 @@
 package com.immersive.ui.agent.flow
 
-import android.content.Context
 import com.immersive.ui.agent.AgentAction
 import com.immersive.ui.agent.TaskSpec
 import com.immersive.ui.agent.UiNode
@@ -36,6 +35,8 @@ class SafetyModule(
         launchablePackages: Set<String>,
         screenshotBase64: String? = null,
         foregroundPackage: String? = null,
+        screenWidth: Int = 0,
+        screenHeight: Int = 0,
     ): SanitizeResult {
         return securityGuard.sanitize(
             action = action,
@@ -44,6 +45,8 @@ class SafetyModule(
             launchablePackages = launchablePackages,
             screenshotBase64 = screenshotBase64,
             foregroundPackage = foregroundPackage,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
         )
     }
 }

@@ -23,16 +23,27 @@ object FrameFingerprint {
         return sha256("${foregroundPackage.orEmpty()}|$uiSig|$imageHint")
     }
 
+    /** Number of evenly spaced sample points taken across the byte array. */
+    private const val SAMPLE_POINTS = 64
+
+    /**
+     * Sample bytes evenly across the whole array (plus the total length) so
+     * changes anywhere in the image affect the fingerprint. JPEG headers and
+     * trailers are nearly constant, so head/tail-only sampling would miss most
+     * mid-image changes.
+     */
     private fun sampleBytes(bytes: ByteArray): String {
-        val headCount = minOf(32, bytes.size)
-        val tailStart = maxOf(headCount, bytes.size - 32)
-        val sb = StringBuilder((headCount + (bytes.size - tailStart)) * 2)
-        for (index in 0 until headCount) {
-            sb.append("%02x".format(bytes[index].toInt() and 0xff))
+        val count = minOf(SAMPLE_POINTS, bytes.size)
+        val sb = StringBuilder(count * 2 + 16)
+        if (count > 0) {
+            // Evenly spaced indices covering [0, size - 1].
+            val step = (bytes.size - 1).toDouble() / maxOf(1, count - 1)
+            for (i in 0 until count) {
+                val index = (i * step).toInt().coerceIn(0, bytes.size - 1)
+                sb.append("%02x".format(bytes[index].toInt() and 0xff))
+            }
         }
-        for (index in tailStart until bytes.size) {
-            sb.append("%02x".format(bytes[index].toInt() and 0xff))
-        }
+        sb.append("#len=").append(bytes.size)
         return sb.toString()
     }
 

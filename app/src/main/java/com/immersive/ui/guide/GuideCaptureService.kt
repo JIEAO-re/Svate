@@ -32,6 +32,7 @@ class GuideCaptureService : Service() {
     private val worker = Executors.newSingleThreadExecutor()
     private var isAnalyzing = false
     private var preferDirection = "LEFT"
+    private var consecutiveMisses = 0
 
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -151,7 +152,15 @@ class GuideCaptureService : Service() {
                 )
 
                 if (!result.targetFound) {
-                    preferDirection = if (preferDirection == "LEFT") "RIGHT" else "LEFT"
+                    // Flip the suggested swipe direction only after several consecutive
+                    // misses instead of oscillating on every captured frame.
+                    consecutiveMisses++
+                    if (consecutiveMisses >= DIRECTION_FLIP_THRESHOLD) {
+                        preferDirection = if (preferDirection == "LEFT") "RIGHT" else "LEFT"
+                        consecutiveMisses = 0
+                    }
+                } else {
+                    consecutiveMisses = 0
                 }
 
                 mainHandler.post {
@@ -262,6 +271,9 @@ class GuideCaptureService : Service() {
         private const val EXTRA_TARGET_APP_NAME = "extra_target_app_name"
         private const val EXTRA_INFERRED_GOAL = "extra_inferred_goal"
         private const val NOTIFICATION_ID = 12001
+
+        /** Consecutive not-found frames required before the swipe hint changes direction. */
+        private const val DIRECTION_FLIP_THRESHOLD = 3
 
         fun start(
             context: Context,

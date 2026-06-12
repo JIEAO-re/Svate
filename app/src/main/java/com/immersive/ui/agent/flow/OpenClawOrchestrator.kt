@@ -21,6 +21,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -57,6 +58,8 @@ class OpenClawOrchestrator(
     companion object {
         private const val TAG = "OpenClawOrchestrator"
         private const val STARTUP_GUARD_MS = 8_000L
+        private const val MAX_DECISION_FAILURES = 3
+        private const val GCS_UPLOAD_TIMEOUT_MS = 10_000L
     }
 
     // ========== Four lower-level pipelines ==========
@@ -96,6 +99,9 @@ class OpenClawOrchestrator(
     private var pendingTargetPackage: String? = null
     private var startupGuardUntilMs: Long = 0L
     private var lastObservationReason: ObservationReason = ObservationReason.APP_START
+    private var popupSubscriptionJob: Job? = null
+    /** Consecutive cloud decision failures, tracked separately from execution failures. */
+    private var decisionFailureStreak = 0
 
     /**
      * Start the agent.
@@ -134,6 +140,7 @@ class OpenClawOrchestrator(
                 traceId = "sess_${System.currentTimeMillis()}",
             ),
         )
+        decisionFailureStreak = 0
 
         // Start the orchestration loop.
         orchestratorJob = scope.launch { orchestratorLoop() }
@@ -146,9 +153,12 @@ class OpenClawOrchestrator(
         isRunning.set(false)
         orchestratorJob?.cancel()
         orchestratorJob = null
+        popupSubscriptionJob?.cancel()
+        popupSubscriptionJob = null
 
-        perceptionFlow.stop()
-        decisionChannel.stop()
+        // stop() may be called before start() initialized the pipelines.
+        if (::perceptionFlow.isInitialized) perceptionFlow.stop()
+        if (::decisionChannel.isInitialized) decisionChannel.stop()
 
         startupGuardUntilMs = 0L
         pendingTargetPackage = null
@@ -183,7 +193,7 @@ class OpenClawOrchestrator(
                 taskSpec = baseCtx.taskSpec,
             )
             if (plan != null) {
-                agentContext.set(baseCtx.copy(taskPlan = plan))
+                agentContext.updateAndGet { it.copy(taskPlan = plan) }
                 postNarration("Plan generated: ${plan.steps.joinToString(" -> ") { it.description }}")
             }
 
@@ -199,12 +209,23 @@ class OpenClawOrchestrator(
             // 6. Start the perception flow and communication channel.
             perceptionFlow.start()
             decisionChannel.start()
+            // Clear any DEGRADED state left over from a previous session.
+            decisionChannel.resetConnection()
 
-            // 7. Subscribe to popup events.
-            scope.launch {
+            // 7. Subscribe to popup events; the job is cancelled in stop() and
+            // in the finally block so it never outlives the session.
+            popupSubscriptionJob?.cancel()
+            popupSubscriptionJob = scope.launch {
                 perceptionFlow.popupDetected.collect { event ->
                     Log.d(TAG, "Popup detected: ${event.popup.type}")
-                    updatePhase(AgentPhase.RECOVERING, "Detected ${event.popup.type.label}. Closing popup...")
+                    if (event.popup.requiresHumanDecision) {
+                        updatePhase(
+                            AgentPhase.WAITING_CONFIRM,
+                            "Detected ${event.popup.type.label}. Please handle it manually.",
+                        )
+                    } else {
+                        updatePhase(AgentPhase.RECOVERING, "Detected ${event.popup.type.label}. Closing popup...")
+                    }
                 }
             }
 
@@ -231,12 +252,16 @@ class OpenClawOrchestrator(
                 // Run guard checks.
                 if (!passStartupGuard(snapshot)) return@collect
 
-                // ObservationModule: upload screenshots to GCS asynchronously.
-                val gcsUri = observationModule.uploadScreenshotToGcs(
-                    imageBytes = snapshot.frame.imageBytes,
-                    traceId = ctx.traceId ?: "",
-                    stepIndex = ctx.stepIndex,
-                )
+                // ObservationModule: upload screenshots to GCS with an overall
+                // timeout. On timeout gcsUri stays null and the decision request
+                // falls back to the inline base64 payload.
+                val gcsUri = withTimeoutOrNull(GCS_UPLOAD_TIMEOUT_MS) {
+                    observationModule.uploadScreenshotToGcs(
+                        imageBytes = snapshot.frame.imageBytes,
+                        traceId = ctx.traceId ?: "",
+                        stepIndex = ctx.stepIndex,
+                    )
+                }
 
                 // PlanningModule: request a decision.
                 updatePhase(AgentPhase.PLANNING, "Planning the next action...")
@@ -251,12 +276,15 @@ class OpenClawOrchestrator(
                     handleDecisionFailure()
                     return@collect
                 }
+                decisionFailureStreak = 0
 
                 // Update the context.
-                agentContext.set(ctx.copy(
-                    serverLatencyMs = (decisionResult.plannerLatencyMs + decisionResult.reviewerLatencyMs).toLong(),
-                    lastReviewerVerdict = decisionResult.reviewerVerdict,
-                ))
+                agentContext.updateAndGet { current ->
+                    current.copy(
+                        serverLatencyMs = (decisionResult.plannerLatencyMs + decisionResult.reviewerLatencyMs).toLong(),
+                        lastReviewerVerdict = decisionResult.reviewerVerdict,
+                    )
+                }
 
                 var action = decisionResult.action
 
@@ -266,6 +294,10 @@ class OpenClawOrchestrator(
                     taskSpec = ctx.taskSpec,
                     uiNodes = snapshot.prunedNodes,
                     launchablePackages = launchablePackages,
+                    screenshotBase64 = snapshot.frame.inlineImageBase64OrNull(),
+                    foregroundPackage = snapshot.foregroundPackage,
+                    screenWidth = snapshot.screenWidth,
+                    screenHeight = snapshot.screenHeight,
                 )
 
                 if (!sanitizeResult.passed) {
@@ -312,13 +344,14 @@ class OpenClawOrchestrator(
 
                 val stepSuccess = record.success
 
-                val afterCtx = agentContext.get()
-                agentContext.set(afterCtx.copy(
-                    stepIndex = afterCtx.stepIndex + 1,
-                    history = afterCtx.history + record,
-                    retryCount = if (stepSuccess) 0 else afterCtx.retryCount + 1,
-                    consecutiveFailCount = if (stepSuccess) 0 else afterCtx.consecutiveFailCount + 1,
-                ))
+                agentContext.updateAndGet { current ->
+                    current.copy(
+                        stepIndex = current.stepIndex + 1,
+                        history = current.history + record,
+                        retryCount = if (stepSuccess) 0 else current.retryCount + 1,
+                        consecutiveFailCount = if (stepSuccess) 0 else current.consecutiveFailCount + 1,
+                    )
+                }
 
                 // Update the observation reason.
                 lastObservationReason = ObservationReason.AFTER_ACTION
@@ -336,6 +369,8 @@ class OpenClawOrchestrator(
             // TelemetryModule: report session end.
             telemetryModule.reportSessionEnd(agentContext.get())
             isRunning.set(false)
+            popupSubscriptionJob?.cancel()
+            popupSubscriptionJob = null
             perceptionFlow.stop()
             decisionChannel.stop()
         }
@@ -384,13 +419,14 @@ class OpenClawOrchestrator(
     }
 
     private suspend fun handleDecisionFailure() {
-        val ctx = agentContext.get()
-        if (ctx.consecutiveFailCount >= 3) {
-            updatePhase(AgentPhase.FAILED, "Too many consecutive failures.")
+        // Decision (network/cloud) failures are counted separately from
+        // execution failures so one does not mask the other.
+        decisionFailureStreak++
+        if (decisionFailureStreak >= MAX_DECISION_FAILURES) {
+            updatePhase(AgentPhase.FAILED, "Too many consecutive decision failures.")
             postFailed("Network issues. Please check connection.")
             isRunning.set(false)
         } else {
-            agentContext.set(ctx.copy(consecutiveFailCount = ctx.consecutiveFailCount + 1))
             delay(1000)
         }
     }
@@ -407,8 +443,7 @@ class OpenClawOrchestrator(
     // ========== UI callbacks ==========
 
     private fun updatePhase(phase: AgentPhase, message: String) {
-        val ctx = agentContext.get()
-        agentContext.set(ctx.copy(phase = phase))
+        agentContext.updateAndGet { it.copy(phase = phase) }
         mainHandler.post { onPhaseChanged?.invoke(phase, message) }
     }
 

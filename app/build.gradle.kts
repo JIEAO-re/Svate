@@ -96,16 +96,6 @@ android {
             localBooleanLiteral("VISUAL_DIFF", true)
         )
         buildConfigField("int", "MAX_RETRY_ATTEMPTS", localIntLiteral("MAX_RETRY_ATTEMPTS", 3))
-        buildConfigField(
-            "boolean",
-            "NEXT_PUBLIC_SHOW_DEV_PANEL",
-            localBooleanLiteral("NEXT_PUBLIC_SHOW_DEV_PANEL", true)
-        )
-        buildConfigField(
-            "boolean",
-            "NEXT_PUBLIC_MOCK_MODE",
-            localBooleanLiteral("NEXT_PUBLIC_MOCK_MODE", false)
-        )
         // Compatibility flag: whether to send the redundant screenshot_base64 field.
         // Disabled by default; enable only for debugging or server-side fallback compatibility.
         buildConfigField(

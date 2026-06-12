@@ -163,17 +163,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             cleanupAgent(appCtx)
         }
 
-        orchestrator.start(
-            goal = plan.inferredGoal,
-            targetAppName = plan.targetAppName,
-            taskSpec = TaskSpec.fromRaw(
-                taskMode = plan.taskMode,
-                searchQuery = plan.searchQuery,
-                researchDepth = plan.researchDepth,
-                homeworkPolicy = plan.homeworkPolicy,
-                askOnUncertain = plan.askOnUncertain,
-            ),
-        )
+        // Mark running before start so a fast completion/failure callback is never overwritten.
+        _isGuideRunning.value = true
+        _statusText.value = "Agent mode guide is running"
+        try {
+            orchestrator.start(
+                goal = plan.inferredGoal,
+                targetAppName = plan.targetAppName,
+                taskSpec = TaskSpec.fromRaw(
+                    taskMode = plan.taskMode,
+                    searchQuery = plan.searchQuery,
+                    researchDepth = plan.researchDepth,
+                    homeworkPolicy = plan.homeworkPolicy,
+                    askOnUncertain = plan.askOnUncertain,
+                ),
+            )
+        } catch (e: Exception) {
+            _isGuideRunning.value = false
+            _statusText.value = "❌ Failed to start agent"
+            emitError("启动失败：${e.localizedMessage ?: "unknown_error"}")
+            try { orchestrator.stop() } catch (_: Exception) {}
+            cleanupAgent(appCtx)
+            return
+        }
         try { AgentStopOverlayService.start(appCtx) } catch (_: Exception) {}
     }
 

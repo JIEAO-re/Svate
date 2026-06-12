@@ -5,10 +5,10 @@ import { useTaskContext } from "@/lib/context/TaskProvider";
 import { SessionState } from "@/lib/schemas/state-machine";
 
 export function ScreenRenderer() {
-  const { latestImageBase64, currentDecision, context, isLoading } = useTaskContext();
+  const { latestImageBase64, currentTurn, context, isLoading } = useTaskContext();
 
   // Parse AI-provided coordinates in [ymin, xmin, ymax, xmax] format (0-1000)
-  const bbox = currentDecision?.next_step?.target_bbox;
+  const bbox = currentTurn?.final_action.target_bbox;
 
   // Draw boxes only when the status is explicit and no high-risk state is active
   const shouldRenderBox =
@@ -16,12 +16,12 @@ export function ScreenRenderer() {
     bbox.length === 4 &&
     !isLoading &&
     context.state !== SessionState.RISK_PAUSED &&
-    currentDecision?.next_step?.risk_level !== "HIGH";
+    currentTurn?.final_action.risk_level !== "HIGH";
 
   const lockAnimationKey = shouldRenderBox
     ? `${bbox[0]}_${bbox[1]}_${bbox[2]}_${bbox[3]}_${context.current_step_index}`
     : "no-lock";
-  const lockLabel = currentDecision?.next_step?.target_element_desc || "请点这里";
+  const lockLabel = currentTurn?.final_action.target_desc || "请点这里";
 
   return (
     <div className="relative w-full max-w-[400px] mx-auto aspect-[9/19.5] bg-gray-900 rounded-[2.5rem] border-[10px] border-gray-800 overflow-hidden shadow-2xl flex items-center justify-center">
@@ -40,7 +40,7 @@ export function ScreenRenderer() {
             className={`w-full h-full object-contain transition-all duration-300 ${isLoading ? 'opacity-40 blur-[2px] grayscale' : 'opacity-100'}`}
           />
 
-          {/* 🌟 核心：大模型目标区域高亮呼吸框 */}
+          {/* 🌟 Core: breathing highlight frame around the model's target area */}
           {shouldRenderBox && (
             <div
               key={lockAnimationKey}
@@ -59,14 +59,14 @@ export function ScreenRenderer() {
                 <div className="w-full h-full rounded-xl bg-black/15 border border-white/25 backdrop-blur-[1px]" />
               </div>
 
-              {/* 视觉锚点：大号指示标 */}
+              {/* Visual anchor: large pointer label */}
               <div className="absolute -bottom-14 left-1/2 -translate-x-1/2 bg-black/75 text-white px-5 py-2 rounded-full font-black text-lg shadow-xl whitespace-nowrap">
                 👇 {lockLabel}
               </div>
             </div>
           )}
 
-          {/* AI 分析时的全屏雷达扫描动画 */}
+          {/* Full-screen radar scan animation while the AI is analyzing */}
           {isLoading && (
             <div className="absolute inset-0 z-20 pointer-events-none overflow-hidden flex flex-col items-center justify-center">
                <div className="w-full h-2 bg-blue-500/80 shadow-[0_0_20px_theme(colors.blue.400)] absolute left-0 animate-[scan_2s_ease-in-out_infinite]" />

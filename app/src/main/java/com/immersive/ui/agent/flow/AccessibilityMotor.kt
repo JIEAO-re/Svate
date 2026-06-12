@@ -264,8 +264,10 @@ class AccessibilityMotor(
     private suspend fun executeSubmitInput(service: AgentAccessibilityService): ExecutionResult {
         val byIme = service.performSubmitInput()
         val success = if (byIme) true else {
+            // Strict fallback: exact-match clicks only, so substring matches or
+            // clickable ancestors can never trigger unintended buttons.
             SEARCH_SUBMIT_KEYWORDS.any { keyword ->
-                service.performClickByText(keyword)
+                service.performClickByExactText(keyword)
             }
         }
         return ExecutionResult(

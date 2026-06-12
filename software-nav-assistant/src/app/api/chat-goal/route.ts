@@ -32,7 +32,6 @@ const ChatGoalResponseSchema = z.object({
   candidates: z.array(AppCandidateSchema).default([]),
 });
 
-const ai = GENAI_CLIENT_ENABLED ? getGenAIClient() : null;
 const MODEL_NAME = LEGACY_DEMO_MODEL;
 
 const APP_HINTS = [
@@ -154,6 +153,19 @@ export async function POST(req: Request) {
       .slice(-16)
       .map((msg) => `${msg.role === "user" ? "user" : "assistant"}: ${msg.content}`)
       .join("\n");
+
+    // Initialize the client per-request: a broken or partial GenAI config
+    // should degrade to the deterministic fallback instead of a 500.
+    let ai: ReturnType<typeof getGenAIClient> | null = null;
+    if (GENAI_CLIENT_ENABLED) {
+      try {
+        ai = getGenAIClient();
+      } catch (error) {
+        console.warn(
+          `[chat-goal] genai client unavailable, using fallback: ${String((error as Error)?.message || error)}`,
+        );
+      }
+    }
 
     if (!ai) {
       return NextResponse.json({ success: true, ...buildFallback(messages) });
