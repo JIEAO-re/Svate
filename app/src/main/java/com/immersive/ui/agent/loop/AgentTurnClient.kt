@@ -18,6 +18,24 @@ data class TurnToolCall(
     val args: JSONObject,
 )
 
+/**
+ * Adapter metadata mirroring the frozen wire `meta` contract (see
+ * docs/agent-loop.md §2 and schemas/agent-turn.ts). All flags default to false
+ * when the server omits the `meta` object.
+ *
+ * @param toolCallsUnsupported the active provider could not deliver function
+ *   declarations as tool calls (OpenAI-compat degraded path); the loop cannot
+ *   execute tools this turn.
+ * @param truncated the model's output was cut off (MAX_TOKENS); the turn must be
+ *   treated as a failed turn, never a completion.
+ * @param visionInputMissing one or more image inputs never reached the model.
+ */
+data class TurnMeta(
+    val toolCallsUnsupported: Boolean = false,
+    val truncated: Boolean = false,
+    val visionInputMissing: Boolean = false,
+)
+
 /** The model's candidate for one turn: optional narration text plus tool calls. */
 data class AgentTurnResponse(
     val traceId: String,
@@ -26,6 +44,7 @@ data class AgentTurnResponse(
     val text: String?,
     val toolCalls: List<TurnToolCall>,
     val finished: Boolean,
+    val meta: TurnMeta = TurnMeta(),
 )
 
 /**
@@ -40,7 +59,11 @@ data class AgentTurnResponse(
  */
 class AgentTurnClient {
     private val baseUrl = BuildConfig.MOBILE_AGENT_BASE_URL.trimEnd('/')
-    private val timeoutMs = BuildConfig.MOBILE_AGENT_TIMEOUT_MS.coerceIn(3_000, 30_000)
+
+    // Allow up to 60s to match the server's maxDuration = 60; the configured
+    // default still comes from BuildConfig.MOBILE_AGENT_TIMEOUT_MS, this only
+    // widens the clamp so a legitimately slow turn is not cut short.
+    private val timeoutMs = BuildConfig.MOBILE_AGENT_TIMEOUT_MS.coerceIn(3_000, 60_000)
     private val authToken: String = BuildConfig.MOBILE_AGENT_AUTH_TOKEN
 
     /**
@@ -79,15 +102,35 @@ class AgentTurnClient {
             )
         }
 
-        // Bound the whole blocking exchange; runInterruptible converts cancellation
-        // into a thread interrupt so a stuck socket read unwinds cleanly.
-        val body = withTimeout(timeoutMs.toLong() + 5_000L) {
-            runInterruptible(Dispatchers.IO) {
-                postJson(url, payload.toString())
+        val payloadText = payload.toString()
+
+        // One bounded retry: a single slow/failed response should not kill the
+        // whole task, but coroutine cancellation must still abort immediately and
+        // is never retried (rethrown below).
+        var lastError: Throwable? = null
+        repeat(2) {
+            try {
+                // Bound the whole blocking exchange; runInterruptible converts
+                // cancellation into a thread interrupt so a stuck socket read
+                // unwinds cleanly.
+                val body = withTimeout(timeoutMs.toLong() + 5_000L) {
+                    runInterruptible(Dispatchers.IO) {
+                        postJson(url, payloadText)
+                    }
+                }
+                return parseResponse(body)
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                // A per-attempt timeout is retryable: it is the loop's own bound
+                // tripping, not the caller cancelling the task.
+                lastError = timeout
+            } catch (cancel: kotlinx.coroutines.CancellationException) {
+                // Genuine coroutine cancellation: stop immediately, never retry.
+                throw cancel
+            } catch (t: Throwable) {
+                lastError = t
             }
         }
-
-        return parseResponse(body)
+        throw lastError ?: IllegalStateException("agent-turn failed")
     }
 
     /** Perform the blocking POST and return the response body text. */
@@ -145,6 +188,19 @@ class AgentTurnClient {
         // flag as finished only when there are also no tool calls to run.
         val finished = assistant.optBoolean("finished", toolCalls.isEmpty())
 
+        // Optional adapter metadata (snake_case on the wire). Absent object or
+        // absent flags default to false.
+        val metaObj = root.optJSONObject("meta")
+        val meta = if (metaObj == null) {
+            TurnMeta()
+        } else {
+            TurnMeta(
+                toolCallsUnsupported = metaObj.optBoolean("tool_calls_unsupported", false),
+                truncated = metaObj.optBoolean("truncated", false),
+                visionInputMissing = metaObj.optBoolean("vision_input_missing", false),
+            )
+        }
+
         return AgentTurnResponse(
             traceId = root.optString("trace_id", ""),
             model = root.optString("model", ""),
@@ -152,6 +208,7 @@ class AgentTurnClient {
             text = text,
             toolCalls = toolCalls,
             finished = finished,
+            meta = meta,
         )
     }
 

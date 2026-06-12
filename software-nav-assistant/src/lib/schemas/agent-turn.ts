@@ -122,6 +122,9 @@ export const AgentTurnResponseSchema = z.object({
       // True when function declarations could not be delivered as tool calls
       // and the model's plain text was returned instead.
       tool_calls_unsupported: z.boolean().optional(),
+      // True when the model's output was cut off because it hit MAX_TOKENS;
+      // the device treats such a turn as a failed turn, not a completion.
+      truncated: z.boolean().optional(),
       // True when one or more image inputs could not be delivered to the model.
       vision_input_missing: z.boolean().optional(),
     })

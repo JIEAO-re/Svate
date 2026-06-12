@@ -33,9 +33,11 @@ class TypeTextTool : PhoneTool {
         if (text.isBlank()) {
             return ToolResult(ok = false, text = "type_text requires non-empty text.")
         }
-        val typed = service.performInput(text)
+        // Strict mode: only write when a field actually holds input focus. Never fall
+        // back to the first editable node on the page, so we cannot type into the wrong field.
+        val typed = service.performInputStrict(text)
         if (!typed) {
-            return ToolResult(ok = false, text = "Could not type; no editable field is focused.")
+            return ToolResult(ok = false, text = "No focused input field; tap the field first.")
         }
         val submit = args.optBoolean("submit", false)
         if (!submit) {

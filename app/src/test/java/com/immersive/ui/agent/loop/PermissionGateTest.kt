@@ -45,8 +45,9 @@ class PermissionGateTest {
 
     @Test
     fun denyFloor_beatsAllowRule() {
+        // A scoped allow-rule exists, but the deny floor still wins.
         val gate = PermissionGate()
-        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, denyFloor = true)
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, denyFloor = true, packageScope = "com.foo")
         gate.applyDecision(q, PermissionDecision.GRANT_ALWAYS)
         assertEquals(GateOutcome.DENY, gate.evaluate(q, PermissionMode.AUTO))
     }
@@ -70,9 +71,11 @@ class PermissionGateTest {
     @Test
     fun high_asks_evenWithAllowRule() {
         // The HIGH floor outranks an allow-rule (order: deny -> high -> allow-rule).
+        // The scoped allow-rule genuinely exists so the HIGH floor is what wins.
         val gate = PermissionGate()
-        val q = query("launch_intent", RiskClass.HIGH, isReadOnly = false)
+        val q = query("launch_intent", RiskClass.HIGH, isReadOnly = false, packageScope = "com.foo")
         gate.applyDecision(q, PermissionDecision.GRANT_ALWAYS)
+        assertTrue(gate.matchesAllowRule(q))
         assertEquals(GateOutcome.ASK, gate.evaluate(q, PermissionMode.AUTO))
     }
 
@@ -164,12 +167,35 @@ class PermissionGateTest {
     }
 
     @Test
-    fun grantAlways_addsRule_andAllowsNextTime_inAskMode() {
+    fun grantAlways_withPackageScope_addsRule_andAllowsNextTime_inAskMode() {
         val gate = PermissionGate()
-        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Login")
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Login", packageScope = "com.foo")
         gate.applyDecision(q, PermissionDecision.GRANT_ALWAYS)
         assertTrue(gate.matchesAllowRule(q))
         assertEquals(GateOutcome.ALLOW, gate.evaluate(q, PermissionMode.ASK))
+    }
+
+    @Test
+    fun grantAlways_withoutPackageScope_addsNoRule_andStillAsks() {
+        // A scopeless "always allow" must not write a bare toolName rule: without a
+        // package it cannot be safely reused, so it degrades to once-only.
+        val gate = PermissionGate()
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Login")
+        gate.applyDecision(q, PermissionDecision.GRANT_ALWAYS)
+        assertTrue(gate.activeRules().isEmpty())
+        assertFalse(gate.matchesAllowRule(q))
+        assertEquals(GateOutcome.ASK, gate.evaluate(q, PermissionMode.ASK))
+    }
+
+    @Test
+    fun grantAlways_withoutPackageScope_doesNotLeakAcrossApps() {
+        // The scopeless grant must never become a cross-app allow: a later call in
+        // any concrete package still asks.
+        val gate = PermissionGate()
+        val scopeless = query("tap", RiskClass.NORMAL, isReadOnly = false)
+        gate.applyDecision(scopeless, PermissionDecision.GRANT_ALWAYS)
+        val inFoo = query("tap", RiskClass.NORMAL, isReadOnly = false, packageScope = "com.foo")
+        assertEquals(GateOutcome.ASK, gate.evaluate(inFoo, PermissionMode.ASK))
     }
 
     @Test
@@ -185,6 +211,17 @@ class PermissionGateTest {
     }
 
     @Test
+    fun clearRules_dropsAllAllowRules() {
+        val gate = PermissionGate()
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, packageScope = "com.foo")
+        gate.applyDecision(q, PermissionDecision.GRANT_ALWAYS)
+        assertTrue(gate.matchesAllowRule(q))
+        gate.clearRules()
+        assertTrue(gate.activeRules().isEmpty())
+        assertEquals(GateOutcome.ASK, gate.evaluate(q, PermissionMode.ASK))
+    }
+
+    @Test
     fun deny_decision_addsNoRule() {
         val gate = PermissionGate()
         val q = query("tap", RiskClass.NORMAL, isReadOnly = false)
@@ -196,10 +233,13 @@ class PermissionGateTest {
     fun allowRule_doesNotOverrideHighFloor() {
         // A GRANT_ALWAYS recorded for a tap that later targets a "pay" button must
         // still ASK, because the keyword upgrade to HIGH is checked before the rule.
+        // Both queries share a package scope so the allow-rule genuinely exists and
+        // the HIGH floor is what forces the prompt.
         val gate = PermissionGate()
-        val benign = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Open menu")
+        val benign = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Open menu", packageScope = "com.foo")
         gate.applyDecision(benign, PermissionDecision.GRANT_ALWAYS)
-        val risky = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Pay now")
+        assertTrue(gate.matchesAllowRule(benign))
+        val risky = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Pay now", packageScope = "com.foo")
         assertEquals(GateOutcome.ASK, gate.evaluate(risky, PermissionMode.AUTO))
     }
 }

@@ -42,6 +42,9 @@ type GenerateContentCandidate = {
   content?: {
     parts?: GenerateContentPart[];
   };
+  /** Why generation stopped, e.g. "STOP" or "MAX_TOKENS"; passed through from
+   * the SDK so callers can detect a truncated (MAX_TOKENS) candidate. */
+  finishReason?: string;
 };
 
 type GenerateContentResponse = {

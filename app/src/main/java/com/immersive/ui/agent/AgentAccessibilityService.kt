@@ -441,6 +441,26 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Input text into the field that currently holds input focus, with no fallback.
+     *
+     * Unlike [performInput], this never falls back to the first editable node on the
+     * page: it only writes when root.findFocus(FOCUS_INPUT) resolves to an editable
+     * node. This avoids silently typing into the wrong field when nothing is focused.
+     * Returns false when there is no focused editable input or the SET_TEXT action
+     * is rejected, so the caller can instruct the model to tap the field first.
+     */
+    fun performInputStrict(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val focusedNode = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        if (!focusedNode.isEditable) return false
+
+        val arguments = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        return focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+    }
+
+    /**
      * Submit the current input by trying IME enter first, then search/go style buttons.
      *
      * Button fallback is intentionally strict: only directly clickable nodes whose

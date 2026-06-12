@@ -49,7 +49,14 @@ class OpenAppTool : PhoneTool {
         if (appName.isNotEmpty()) {
             val motor = AccessibilityMotor(ctx.appContext, ctx.scope)
             val executionModule = ExecutionModule(ctx.appContext, motor)
-            val launched = executionModule.tryDirectOpenApp(appName)
+            // tryDirectOpenApp resolves the package and starts the activity; the
+            // startActivity can throw. Catch it so expected failures never propagate
+            // (PhoneTool contract), and distinguish not-found from a launch error.
+            val launched = try {
+                executionModule.tryDirectOpenApp(appName)
+            } catch (t: Throwable) {
+                return ToolResult(ok = false, text = "Failed to open \"$appName\": ${t.message}")
+            }
             return if (launched != null) {
                 ToolResult(ok = true, text = "Opened \"$appName\" ($launched).")
             } else {

@@ -237,8 +237,16 @@ export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurn
     },
   });
 
-  const candidateParts = response.candidates?.[0]?.content?.parts ?? [];
+  const candidate = response.candidates?.[0];
+  const candidateParts = candidate?.content?.parts ?? [];
   const parsed = parseCandidate(candidateParts);
+
+  // A MAX_TOKENS finish means the model's output was cut off mid-stream. Such a
+  // turn must not be reported as a completion: any tool calls in it may be
+  // partial, and an empty turn is a failed turn, not a success. Mark it via
+  // meta.truncated and force finished = false so the device treats it as a
+  // failed turn (checkBudgetAfterFailure) rather than emitting success.
+  const truncated = candidate?.finishReason === "MAX_TOKENS";
 
   return {
     trace_id: request.trace_id,
@@ -247,11 +255,19 @@ export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurn
     assistant: {
       text: parsed.text,
       tool_calls: parsed.toolCalls,
-      // No function call means the turn is complete.
-      finished: parsed.toolCalls.length === 0,
+      // No function call means the turn is complete, unless the candidate was
+      // truncated (MAX_TOKENS), in which case the turn is never a completion.
+      finished: truncated ? false : parsed.toolCalls.length === 0,
     },
-    ...(response.meta?.vision_input_missing
-      ? { meta: { vision_input_missing: true } }
+    ...(truncated || response.meta?.vision_input_missing
+      ? {
+          meta: {
+            ...(truncated ? { truncated: true } : {}),
+            ...(response.meta?.vision_input_missing
+              ? { vision_input_missing: true }
+              : {}),
+          },
+        }
       : {}),
   };
 }

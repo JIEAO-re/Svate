@@ -253,6 +253,68 @@ describe("POST /api/mobile-agent/agent-turn", () => {
     expect(params.contents[2].parts[0]).toHaveProperty("functionResponse");
   });
 
+  it("marks meta.truncated and finished = false when the candidate hit MAX_TOKENS", async () => {
+    enableDevAuthBypass();
+    // A MAX_TOKENS finishReason means the model's output was cut off. The proxy
+    // must flag meta.truncated and never report the turn as finished, even
+    // though no tool call was parsed.
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [
+        {
+          content: {
+            parts: [{ text: "Partial narration that got cut" }],
+          },
+          finishReason: "MAX_TOKENS",
+        },
+      ],
+    });
+    mockGenAiClient(generateContent);
+
+    const response = await postAgentTurn(buildRequestBody());
+
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json).toMatchObject({
+      success: true,
+      assistant: {
+        text: "Partial narration that got cut",
+        tool_calls: [],
+        finished: false,
+      },
+      meta: { truncated: true },
+    });
+  });
+
+  it("does not set meta.truncated when the candidate finished with STOP", async () => {
+    enableDevAuthBypass();
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [
+        {
+          content: {
+            parts: [{ text: "Task complete." }],
+          },
+          finishReason: "STOP",
+        },
+      ],
+    });
+    mockGenAiClient(generateContent);
+
+    const response = await postAgentTurn(buildRequestBody());
+
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json).toMatchObject({
+      success: true,
+      assistant: {
+        text: "Task complete.",
+        tool_calls: [],
+        finished: true,
+      },
+    });
+    // A normal STOP finish must not carry a truncated marker.
+    expect(json.meta?.truncated).toBeUndefined();
+  });
+
   it("degrades to text + finished on an OpenAI-compatible backend", async () => {
     enableDevAuthBypass();
     process.env.OPENAI_COMPAT_ENABLED = "true";

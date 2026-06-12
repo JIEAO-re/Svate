@@ -154,4 +154,16 @@ class AgentLoopState(
     }
 
     fun consecutiveFailures(): Int = consecutiveFailures
+
+    /**
+     * Reset all per-task state so a new task starts from a clean slate: the
+     * conversation entries, the turn counter, and the consecutive-failure
+     * counter. The live [mode] is intentionally preserved because it mirrors the
+     * UI toggle and is not task-scoped.
+     */
+    fun reset() {
+        entries.clear()
+        turnCount = 0
+        consecutiveFailures = 0
+    }
 }

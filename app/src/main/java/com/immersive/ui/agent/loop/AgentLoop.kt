@@ -1,14 +1,18 @@
 package com.immersive.ui.agent.loop
 
 import android.content.Context
+import com.immersive.ui.agent.AgentAccessibilityService
 import com.immersive.ui.agent.IntentGuard
 import com.immersive.ui.agent.IntentSpec
+import com.immersive.ui.agent.UiNode
 import com.immersive.ui.agent.flow.VisualInjectionGuard
 import com.immersive.ui.agent.loop.tools.ToolSupport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -74,7 +78,10 @@ class AgentLoop(
     /** Pending permission prompts keyed by toolCallId. */
     private val pendingPermissions = ConcurrentHashMap<String, CompletableDeferred<PermissionDecision>>()
 
-    private val sessionId: String = "loop_${System.currentTimeMillis()}"
+    // Refreshed on every start so per-task state (allow-rules, conversation,
+    // budgets, session id) never leaks across tasks.
+    @Volatile
+    private var sessionId: String = "loop_${System.currentTimeMillis()}"
 
     @Volatile
     private var loopJob: Job? = null
@@ -82,10 +89,24 @@ class AgentLoop(
     /** Start the loop for the given [goal]. A second call is ignored while running. */
     fun start(goal: String) {
         if (loopJob?.isActive == true) return
-        loopJob = scope.launch {
+
+        // Isolate this task from any previous run: clear conversation/budgets,
+        // drop session allow-rules (so "always allow" never crosses tasks), reset
+        // any pending permission prompts, and mint a fresh session id.
+        state.reset()
+        gate.clearRules()
+        pendingPermissions.clear()
+        sessionId = "loop_${System.currentTimeMillis()}"
+
+        // Run the loop off the main thread; SharedFlow.emit is thread-safe and UI
+        // collectors hop back to Main themselves.
+        loopJob = scope.launch(Dispatchers.Default) {
             try {
                 runLoop(goal)
             } catch (t: Throwable) {
+                // Let cancellation propagate so stop() does not surface a false
+                // failure.
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 emit(AgentLoopEvent.Failed("loop error: ${t.message}"))
             }
         }
@@ -117,7 +138,9 @@ class AgentLoop(
         })
         attachObservationImage()
 
-        while (scope.isActive) {
+        // Check the *current* coroutine's lifecycle (the loop job), not the parent
+        // scope, so cancelling this loop alone stops it.
+        while (currentCoroutineContext().isActive) {
             if (!state.beginTurn()) {
                 emit(AgentLoopEvent.Failed("reached max turns (${state.maxTurns})"))
                 return
@@ -133,6 +156,7 @@ class AgentLoop(
                     tools = registry.toDeclarations(),
                 )
             } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 emit(AgentLoopEvent.Failed("turn request failed: ${t.message}"))
                 return
             }
@@ -142,8 +166,23 @@ class AgentLoop(
                 emit(AgentLoopEvent.Narration(narration))
             }
 
-            // Turn complete with no tool calls: the model is done.
+            // No tool calls this turn: distinguish a real completion from a
+            // degraded/truncated turn before reporting success (meta contract).
             if (response.toolCalls.isEmpty()) {
+                if (response.meta.toolCallsUnsupported) {
+                    // The backend could not execute tools; the model only returned
+                    // text, so the loop cannot make progress.
+                    emit(AgentLoopEvent.Failed("后端不支持工具调用,无法自主执行"))
+                    return
+                }
+                if (response.meta.truncated) {
+                    // MAX_TOKENS cut the output off: treat as a failed turn, not a
+                    // completion, and let the failure budget decide whether to stop.
+                    val terminal = checkBudgetAfterFailure("model output truncated")
+                    if (terminal) return
+                    continue
+                }
+                // Genuine completion: the model is done.
                 emit(AgentLoopEvent.Finished(success = true, summary = response.text ?: "Done."))
                 return
             }
@@ -219,6 +258,7 @@ class AgentLoop(
         val result = try {
             tool.execute(call.args, toolContext)
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             ToolResult(ok = false, text = "tool threw: ${t.message}")
         }
 
@@ -231,17 +271,32 @@ class AgentLoop(
             return true
         }
 
-        // After a successful write tool, attach a fresh observation so the model
-        // sees the effect of its action.
-        var attached = false
-        if (!tool.isReadOnly && result.ok) {
-            appendObservationAfterWrite()
-            attached = true
-        }
+        // After a successful write tool, capture a fresh post-action observation.
+        // The Gemini contract requires every model[function_call] to be directly
+        // followed by its function[function_response] (agent-loop.md §2/§6), so the
+        // observation text is merged into the response itself and the screenshot
+        // image is appended as a *separate* user observation AFTER the response.
+        val observationText = if (!tool.isReadOnly && result.ok) buildObservationText() else null
+        val observationImage = if (!tool.isReadOnly && result.ok) captureObservationImage() else null
+        val attached = observationText != null
 
         val response = if (result.ok) successResponse(result.text) else errorResponse(result.text)
         response.put("observation_attached", attached)
+        if (observationText != null) {
+            response.put("observation", observationText)
+        }
+        // function_response immediately follows its function_call (no user entry
+        // inserted in between).
         state.appendFunctionResponse(call.name, response)
+
+        // The post-action screenshot, if any, follows as its own user observation
+        // so the model still sees the resulting screen image.
+        if (attached) {
+            state.appendObservation(
+                text = "(post-action screen)",
+                imageBase64 = observationImage,
+            )
+        }
 
         return if (result.ok) {
             state.recordToolSuccess()
@@ -256,6 +311,7 @@ class AgentLoop(
         val result = try {
             tool.execute(call.args, toolContext)
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             ToolResult(ok = false, text = "ask_user failed: ${t.message}")
         }
         val question = result.text
@@ -315,25 +371,46 @@ class AgentLoop(
      * rejects. Keyword upgrades for tap/type are handled inside the gate.
      */
     private fun buildQuery(tool: PhoneTool, call: TurnToolCall): PermissionQuery {
+        // Read one pruned-tree snapshot for this evaluation and reuse it for both
+        // tap-target resolution and the injection deny floor, instead of parsing
+        // the full tree multiple times per tool call (and risking inconsistent
+        // snapshots between the two reads).
+        val service = toolContext.service()
+        val nodes = if (service != null) ToolSupport.readPrunedNodes(service) else emptyList()
+        val foreground = service?.getForegroundPackageName().orEmpty().trim()
+
         // For taps, resolve the underlying node text behind a som_id or x/y so the
         // gate's hard-keyword screening also covers coordinate/index taps, not just
         // text selectors. Otherwise a "Pay"/"支付" button tapped by id or pixel would
         // be classified NORMAL and auto-run in AUTO mode.
-        val targetText = listOf(extractTargetText(call.args), resolveTapTargetText(tool, call.args))
+        val targetText = listOf(extractTargetText(call.args), resolveTapTargetText(tool, call.args, nodes))
             .filter { it.isNotBlank() }
             .joinToString(" ")
-        val deny = computeDenyFloor(tool, call)
+        val deny = computeDenyFloor(tool, call, service, nodes)
+
+        // Scope GRANT_ALWAYS by package. Tools that carry no "package" arg
+        // (tap/type_text/...) fall back to the current foreground package so an
+        // "always allow" stays scoped to the app on screen. When even that is
+        // unknown the scope stays blank, which the gate degrades to once-only.
+        val explicitPackage = call.args.optString("package", "").trim()
+        val packageScope = explicitPackage.ifBlank { foreground }
+
         return PermissionQuery(
             toolName = tool.name,
             riskClass = tool.riskClass,
             isReadOnly = tool.isReadOnly,
             targetText = targetText,
             denyFloor = deny,
-            packageScope = call.args.optString("package", "").trim(),
+            packageScope = packageScope,
         )
     }
 
-    private fun computeDenyFloor(tool: PhoneTool, call: TurnToolCall): Boolean {
+    private fun computeDenyFloor(
+        tool: PhoneTool,
+        call: TurnToolCall,
+        service: AgentAccessibilityService?,
+        nodes: List<UiNode>,
+    ): Boolean {
         // launch_intent rejected by the whitelist is a hard deny.
         if (tool.name == "launch_intent") {
             val spec = IntentSpec(
@@ -347,36 +424,34 @@ class AgentLoop(
         }
 
         // A visual-injection HIGH/CRITICAL screen hard-blocks any write tool.
-        if (!tool.isReadOnly) {
-            val service = toolContext.service()
-            if (service != null) {
-                val nodes = ToolSupport.readPrunedNodes(service)
-                val foreground = service.getForegroundPackageName()
-                val (w, h) = service.getScreenSize()
-                val scan = injectionGuard.scan(
-                    uiNodes = nodes,
-                    screenshotBase64 = null,
-                    foregroundPackage = foreground,
-                    screenWidth = w,
-                    screenHeight = h,
-                )
-                if (scan.shouldBlock) return true
-            }
+        if (!tool.isReadOnly && service != null) {
+            val foreground = service.getForegroundPackageName()
+            val (w, h) = service.getScreenSize()
+            val scan = injectionGuard.scan(
+                uiNodes = nodes,
+                screenshotBase64 = null,
+                foregroundPackage = foreground,
+                screenWidth = w,
+                screenHeight = h,
+            )
+            if (scan.shouldBlock) return true
         }
         return false
     }
 
     /**
-     * For a tap by som_id or x/y, look up the targeted node in the pruned tree and
-     * return its visible text + content description, so hard-keyword screening can
-     * see what a coordinate/index tap actually lands on. Returns "" for non-tap
-     * tools, selector-only taps (already screened by performClickByExactText), or
-     * when no node is found.
+     * For a tap by som_id or x/y, look up the targeted node in the supplied pruned
+     * tree and return its visible text + content description, so hard-keyword
+     * screening can see what a coordinate/index tap actually lands on. Returns ""
+     * for non-tap tools, selector-only taps (already screened by
+     * performClickByExactText), or when no node is found.
      */
-    private fun resolveTapTargetText(tool: PhoneTool, args: JSONObject): String {
+    private fun resolveTapTargetText(
+        tool: PhoneTool,
+        args: JSONObject,
+        nodes: List<UiNode>,
+    ): String {
         if (tool.name != "tap") return ""
-        val service = toolContext.service() ?: return ""
-        val nodes = ToolSupport.readPrunedNodes(service)
         if (nodes.isEmpty()) return ""
 
         val node = when {
@@ -438,11 +513,10 @@ class AgentLoop(
         }
     }
 
-    /** Append a fresh observation after a write tool so the model sees the effect. */
-    private suspend fun appendObservationAfterWrite() {
-        val capture = toolContext.capture()
-        val image = capture?.captureBase64()
-        state.appendObservation(text = buildObservationText(), imageBase64 = image)
+    /** Capture a fresh screen image as base64, or null when capture is unavailable. */
+    private suspend fun captureObservationImage(): String? {
+        val capture = toolContext.capture() ?: return null
+        return capture.captureBase64()?.takeIf { it.isNotBlank() }
     }
 
     // ===== Budgets and helpers =====
@@ -502,6 +576,12 @@ class AgentLoop(
             appendLine("Targeting: prefer tapping by the bounds shown in read_ui_tree (use the center as x/y),")
             appendLine("or pass som_id (the node index), or a selector matching exact visible text. Read the")
             appendLine("latest screenshot and UI nodes before each action.")
+            appendLine()
+            appendLine("som_id stability: a som_id is only valid for the exact frame you just got from")
+            appendLine("read_ui_tree. As soon as the screen changes (after any tap/type/scroll/navigation, or")
+            appendLine("when new content loads) those ids are stale: the same som_id may now point at a")
+            appendLine("different element or nothing. Always call read_ui_tree again after the screen changes")
+            appendLine("and use the fresh ids; never reuse a som_id across screens.")
             appendLine()
             appendLine("Safety red lines: never attempt payment, transfer, password entry, deletion, or")
             appendLine("system authorization. high-risk steps require explicit user approval and may be denied;")

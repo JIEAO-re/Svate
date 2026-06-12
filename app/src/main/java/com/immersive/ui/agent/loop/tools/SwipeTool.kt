@@ -39,8 +39,20 @@ class SwipeTool : PhoneTool {
         val service = ctx.service()
             ?: return ToolResult(ok = false, text = "Accessibility service unavailable; swipe not performed.")
 
+        val hasX1 = args.has("x1")
+        val hasY1 = args.has("y1")
+        val hasX2 = args.has("x2")
+        val hasY2 = args.has("y2")
+        val hasAllCoords = hasX1 && hasY1 && hasX2 && hasY2
+        val hasAnyCoord = hasX1 || hasY1 || hasX2 || hasY2
+
+        // Reject a partial coordinate set instead of silently falling back to a direction.
+        if (hasAnyCoord && !hasAllCoords) {
+            return ToolResult(ok = false, text = "swipe needs all of x1,y1,x2,y2, or a direction")
+        }
+
         // Explicit path takes priority when all four coordinates are present.
-        if (args.has("x1") && args.has("y1") && args.has("x2") && args.has("y2")) {
+        if (hasAllCoords) {
             val (screenWidth, screenHeight) = service.getScreenSize()
             if (screenWidth <= 0 || screenHeight <= 0) {
                 return ToolResult(ok = false, text = "Screen size unavailable for swipe path.")
@@ -55,7 +67,14 @@ class SwipeTool : PhoneTool {
             return ToolResult(ok = ok, text = if (ok) "Swiped along path." else "Swipe path failed.")
         }
 
-        val direction = args.optString("direction", "").trim().ifBlank { "up" }
+        // No full coordinate path: require a valid named direction; never default to "up".
+        val direction = args.optString("direction", "").trim()
+        if (direction.lowercase() !in setOf("up", "down", "left", "right")) {
+            return ToolResult(
+                ok = false,
+                text = "swipe requires a valid direction (up/down/left/right) or full x1,y1,x2,y2",
+            )
+        }
         val ok = ToolSupport.awaitGesture { cb -> service.performSwipe(direction, cb) }
         return ToolResult(ok = ok, text = if (ok) "Swiped $direction." else "Swipe $direction failed.")
     }
