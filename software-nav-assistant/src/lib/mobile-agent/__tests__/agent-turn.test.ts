@@ -90,6 +90,7 @@ describe("POST /api/mobile-agent/agent-turn", () => {
     resetEnv();
     vi.resetModules();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("rejects unauthenticated requests with 401", async () => {
@@ -315,16 +316,32 @@ describe("POST /api/mobile-agent/agent-turn", () => {
     expect(json.meta?.truncated).toBeUndefined();
   });
 
-  it("degrades to text + finished on an OpenAI-compatible backend", async () => {
+  it("maps OpenAI tool_calls to assistant.tool_calls on an OpenAI-compatible backend", async () => {
     enableDevAuthBypass();
     process.env.OPENAI_COMPAT_ENABLED = "true";
     process.env.OPENAI_COMPAT_BASE_URL = "https://compat.example/v1";
     process.env.OPENAI_COMPAT_API_KEY = "compat-key";
+    // resolveModelWithFallback is mocked so the /models lookup is skipped; the
+    // OpenAI path itself does not call getGenAIClient.
+    mockGenAiClient(vi.fn());
 
-    const generateContent = vi.fn().mockResolvedValue({
-      text: "I cannot call tools here, but here is the plan.",
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              content: "Tapping the settings icon.",
+              tool_calls: [
+                { id: "call_abc", type: "function", function: { name: "tap", arguments: '{"x":100,"y":200}' } },
+              ],
+            },
+          },
+        ],
+      }),
     });
-    mockGenAiClient(generateContent);
+    vi.stubGlobal("fetch", fetchMock);
 
     const response = await postAgentTurn(buildRequestBody());
 
@@ -333,11 +350,48 @@ describe("POST /api/mobile-agent/agent-turn", () => {
     expect(json).toMatchObject({
       success: true,
       assistant: {
-        text: "I cannot call tools here, but here is the plan.",
-        tool_calls: [],
-        finished: true,
+        text: "Tapping the settings icon.",
+        tool_calls: [{ id: "call_abc", name: "tap", args: { x: 100, y: 200 } }],
+        finished: false,
       },
-      meta: { tool_calls_unsupported: true },
     });
+
+    // The request must hit chat/completions with OpenAI-format tools, a system
+    // message, and Bearer auth.
+    const [url, init] = fetchMock.mock.calls[0] as [string, { body: string; headers: Record<string, string> }];
+    expect(url).toBe("https://compat.example/v1/chat/completions");
+    const sent = JSON.parse(init.body);
+    expect(sent.tools[0].function.name).toBe("tap");
+    expect(sent.tool_choice).toBe("auto");
+    expect(sent.messages[0].role).toBe("system");
+    expect(init.headers.Authorization).toBe("Bearer compat-key");
+  });
+
+  it("finishes when the OpenAI-compatible backend returns plain text", async () => {
+    enableDevAuthBypass();
+    process.env.OPENAI_COMPAT_ENABLED = "true";
+    process.env.OPENAI_COMPAT_BASE_URL = "https://compat.example/v1";
+    process.env.OPENAI_COMPAT_API_KEY = "compat-key";
+    mockGenAiClient(vi.fn());
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ finish_reason: "stop", message: { content: "All done." } }],
+        }),
+      }),
+    );
+
+    const response = await postAgentTurn(buildRequestBody());
+
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json).toMatchObject({
+      success: true,
+      assistant: { text: "All done.", tool_calls: [], finished: true },
+    });
+    expect(json.meta?.tool_calls_unsupported).toBeUndefined();
   });
 });

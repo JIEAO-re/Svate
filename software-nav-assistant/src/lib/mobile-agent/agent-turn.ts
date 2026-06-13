@@ -1,6 +1,11 @@
 import type { Content, Part } from "@google/genai";
 import { getGenAIClient, resolveModelWithFallback } from "@/lib/mobile-agent/genai-client";
-import { OPENAI_COMPAT_ENABLED, PLANNER_MODEL } from "@/lib/mobile-agent/env";
+import {
+  OPENAI_COMPAT_ENABLED,
+  OPENAI_COMPAT_BASE_URL,
+  OPENAI_COMPAT_API_KEY,
+  PLANNER_MODEL,
+} from "@/lib/mobile-agent/env";
 import type {
   AgentContent,
   AgentTurnRequest,
@@ -165,62 +170,211 @@ function parseCandidate(parts: Array<{ text?: string; functionCall?: { name?: st
 }
 
 // ---------------------------------------------------------------------------
+// OpenAI-compatible path with real tool calling.
+//
+// Unlike the shared genai-client adapter (which flattens the conversation into a
+// single user message and cannot execute tools), this builds proper multi-turn
+// OpenAI Chat Completions `messages` — preserving roles, mapping function_call
+// parts to assistant `tool_calls` and function_response parts to `tool` messages
+// — and sends the tool declarations, so an OpenAI-compatible gateway (base_url +
+// api key) drives the agent loop with genuine function calling.
+// ---------------------------------------------------------------------------
+
+type OpenAIChatMessage =
+  | { role: "system"; content: string }
+  | {
+      role: "user";
+      content: string | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+    }
+  | {
+      role: "assistant";
+      content: string | null;
+      tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+    }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+/**
+ * Convert the wire Gemini-style Content[] into OpenAI Chat Completions messages.
+ * The device sends each function_call as its own `model` turn immediately followed
+ * by the matching `function` turn (agent-loop.md §2), so tool-call ids are paired
+ * positionally via a FIFO queue.
+ */
+function contentsToOpenAIMessages(
+  contents: AgentContent[],
+  systemInstruction: string,
+): OpenAIChatMessage[] {
+  const messages: OpenAIChatMessage[] = [];
+  if (systemInstruction.trim()) {
+    messages.push({ role: "system", content: systemInstruction });
+  }
+
+  const pendingToolCallIds: string[] = [];
+  let toolCallCounter = 0;
+
+  for (const content of contents) {
+    if (content.role === "function") {
+      for (const part of content.parts) {
+        if ("function_response" in part) {
+          const toolCallId = pendingToolCallIds.shift() ?? `call_${toolCallCounter++}`;
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify(part.function_response.response ?? {}),
+          });
+        }
+      }
+      continue;
+    }
+
+    if (content.role === "model") {
+      const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
+      const textChunks: string[] = [];
+      for (const part of content.parts) {
+        if ("function_call" in part) {
+          const id = `call_${toolCallCounter++}`;
+          pendingToolCallIds.push(id);
+          toolCalls.push({
+            id,
+            type: "function",
+            function: { name: part.function_call.name, arguments: JSON.stringify(part.function_call.args ?? {}) },
+          });
+        } else if ("text" in part) {
+          textChunks.push(part.text);
+        }
+      }
+      if (toolCalls.length > 0) {
+        messages.push({ role: "assistant", content: textChunks.join("") || null, tool_calls: toolCalls });
+      } else {
+        messages.push({ role: "assistant", content: textChunks.join("") });
+      }
+      continue;
+    }
+
+    // role === "user": text and/or inline images.
+    const parts: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [];
+    for (const part of content.parts) {
+      if ("text" in part) {
+        parts.push({ type: "text", text: part.text });
+      } else if ("inline_image_base64" in part) {
+        parts.push({
+          type: "image_url",
+          image_url: { url: `data:${part.mime_type};base64,${part.inline_image_base64}` },
+        });
+      }
+    }
+    if (parts.length === 1 && parts[0].type === "text") {
+      messages.push({ role: "user", content: parts[0].text });
+    } else {
+      messages.push({ role: "user", content: parts });
+    }
+  }
+
+  return messages;
+}
+
+async function runAgentTurnViaOpenAI(
+  request: AgentTurnRequest,
+  resolvedModel: string,
+  started: number,
+): Promise<AgentTurnResponse> {
+  const messages = contentsToOpenAIMessages(request.contents, request.system_instruction);
+  const tools = request.tools.length > 0 ? mapToolsToOpenAI(request.tools) : undefined;
+
+  const body: Record<string, unknown> = {
+    model: resolvedModel,
+    messages,
+    temperature: request.generation?.temperature ?? 0.2,
+    ...(tools ? { tools, tool_choice: "auto" } : {}),
+    ...(request.generation?.max_output_tokens !== undefined
+      ? { max_tokens: request.generation.max_output_tokens }
+      : {}),
+  };
+
+  const response = await fetch(`${OPENAI_COMPAT_BASE_URL}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_COMPAT_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`[openai-compat] agent-turn failed: HTTP ${response.status} | ${text}`);
+  }
+
+  const json: unknown = await response.json();
+  const choice = isRecord(json) && Array.isArray(json.choices) ? json.choices[0] : undefined;
+  const message = isRecord(choice) && isRecord(choice.message) ? choice.message : {};
+  const finishReason = isRecord(choice) && typeof choice.finish_reason === "string" ? choice.finish_reason : "";
+
+  const text =
+    typeof message.content === "string" && message.content.length > 0 ? message.content : null;
+
+  const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const toolCalls: ToolCall[] = [];
+  rawToolCalls.forEach((tc, index) => {
+    if (!isRecord(tc) || !isRecord(tc.function) || typeof tc.function.name !== "string" || !tc.function.name) {
+      return;
+    }
+    let args: Record<string, unknown> = {};
+    const rawArgs = tc.function.arguments;
+    if (typeof rawArgs === "string" && rawArgs.trim()) {
+      try {
+        const parsed = JSON.parse(rawArgs);
+        if (isRecord(parsed)) args = parsed;
+      } catch {
+        args = {};
+      }
+    } else if (isRecord(rawArgs)) {
+      args = rawArgs as Record<string, unknown>;
+    }
+    toolCalls.push({
+      id: typeof tc.id === "string" && tc.id ? tc.id : `call_${index}`,
+      name: tc.function.name,
+      args,
+    });
+  });
+
+  // A "length" finish means the output was cut off; treat it as a failed turn,
+  // never a completion (mirrors the Gemini MAX_TOKENS handling).
+  const truncated = finishReason === "length";
+
+  return {
+    trace_id: request.trace_id,
+    model: resolvedModel,
+    latency_ms: Date.now() - started,
+    assistant: {
+      text,
+      tool_calls: toolCalls,
+      finished: truncated ? false : toolCalls.length === 0,
+    },
+    ...(truncated ? { meta: { truncated: true } } : {}),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Entry point.
 // ---------------------------------------------------------------------------
 
 export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurnResponse> {
   const started = Date.now();
-  const ai = getGenAIClient();
   const resolvedModel = await resolveModelWithFallback(PLANNER_MODEL, [FALLBACK_MODEL]);
 
-  const contents = request.contents.map(mapContentToGemini);
-  const systemInstruction = request.system_instruction.trim()
-    ? request.system_instruction
-    : undefined;
-
-  // OpenAI-compatible degraded path: the shared adapter flattens the
-  // conversation into a single user message and does not execute tool calls.
-  // Map the declarations to OpenAI tool format on a best-effort basis, then
-  // return the model's plain text with finished = true and a meta marker.
+  // OpenAI-compatible gateway (base_url + api key): drive the loop with genuine
+  // function calling over Chat Completions.
   if (OPENAI_COMPAT_ENABLED) {
-    // Build the mapping even though the adapter ignores it, to honor the
-    // best-effort contract and keep the shape ready for a future tool-capable
-    // backend.
-    void mapToolsToOpenAI(request.tools);
-
-    const response = await ai.models.generateContent({
-      model: resolvedModel,
-      contents,
-      config: {
-        ...(systemInstruction ? { systemInstruction } : {}),
-        ...(request.generation?.temperature !== undefined
-          ? { temperature: request.generation.temperature }
-          : {}),
-        ...(request.generation?.max_output_tokens !== undefined
-          ? { maxOutputTokens: request.generation.max_output_tokens }
-          : {}),
-      },
-    });
-
-    const text = response.text && response.text.length > 0 ? response.text : null;
-    return {
-      trace_id: request.trace_id,
-      model: resolvedModel,
-      latency_ms: Date.now() - started,
-      assistant: {
-        text,
-        tool_calls: [],
-        finished: true,
-      },
-      meta: {
-        tool_calls_unsupported: true,
-        ...(response.meta?.vision_input_missing ? { vision_input_missing: true } : {}),
-      },
-    };
+    return runAgentTurnViaOpenAI(request, resolvedModel, started);
   }
 
   // Gemini path: forward the conversation with function calling enabled and map
   // the candidate's functionCall parts to assistant.tool_calls.
+  const ai = getGenAIClient();
+  const contents = request.contents.map(mapContentToGemini);
+  const systemInstruction = request.system_instruction.trim()
+    ? request.system_instruction
+    : undefined;
   const geminiTools = mapToolsToGemini(request.tools);
   const response = await ai.models.generateContent({
     model: resolvedModel,
