@@ -1,4 +1,26 @@
 import { z } from "zod";
+import {
+  SCREENSHOT_UPLOAD_BUCKET,
+  GUIDE_MEDIA_BUCKET,
+  LEGACY_GCS_BUCKET_NAME,
+} from "@/lib/mobile-agent/env";
+
+/**
+ * A device-supplied gcs_uri is fed to the model directly as fileData, so the
+ * model reads that object with the server's own credentials. Restrict it to the
+ * app's configured buckets to prevent a malicious device from referencing any
+ * other bucket the service account can read (read-scope escalation / SSRF). When
+ * no bucket is configured the check cannot be enforced and is skipped.
+ */
+function gcsUriBucketAllowed(uri: string): boolean {
+  const allowed = [SCREENSHOT_UPLOAD_BUCKET, GUIDE_MEDIA_BUCKET, LEGACY_GCS_BUCKET_NAME]
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0);
+  if (allowed.length === 0) return true;
+  const match = /^gs:\/\/([^/]+)\//.exec(uri);
+  if (!match) return false;
+  return allowed.includes(match[1]);
+}
 
 export const AgentIntentSchema = z.enum([
   "CLICK",
@@ -199,6 +221,7 @@ export const MobileUiNodeSchema = z.object({
 export const GcsUriSchema = z
   .string()
   .regex(/^gs:\/\/[a-z0-9][-a-z0-9_.]*[a-z0-9]\/.*$/, "Invalid GCS URI format")
+  .refine(gcsUriBucketAllowed, "GCS bucket is not in the allowed set")
   .describe("GCS 对象 URI，格式：gs://bucket-name/path/to/object");
 
 export const LiveFrameSchema = z.object({
@@ -253,7 +276,7 @@ export const MobileObservationSchema = z.object({
   som_markers: z.array(SomMarkerSchema).max(60).optional(),
   ui_node_stats: UiNodeStatsSchema.optional(),
   frame_fingerprint: z.string().min(1).optional(),
-  ui_nodes: z.array(MobileUiNodeSchema),
+  ui_nodes: z.array(MobileUiNodeSchema).max(500),
   previous_action_result: z.enum(["SUCCESS", "FAILED", "NOT_EXECUTED"]),
   previous_checkpoint_match: z.boolean(),
 }).superRefine((observation, ctx) => {
@@ -288,7 +311,7 @@ export const NextStepRequestSchema = z.object({
   session_id: z.string().min(1),
   turn_index: z.number().int().min(0),
   mode: z.enum(["shadow", "active"]),
-  goal: z.string().min(1),
+  goal: z.string().min(1).max(8_000),
   task_spec: MobileTaskSpecSchema,
   observation: MobileObservationSchema,
   history_tail: z.array(MobileHistoryItemSchema),

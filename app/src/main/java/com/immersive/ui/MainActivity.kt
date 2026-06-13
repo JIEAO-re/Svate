@@ -134,6 +134,7 @@ import com.immersive.ui.ui.theme.UINavTheme
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 private data class UiMessage(
     val id: String,
@@ -193,6 +194,8 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     // New experimental "autonomous agent loop" mode (claude-code-style on-device loop).
     // It coexists with the fixed pipeline above and is selected independently from the UI.
     private var isAgentLoopMode by mutableStateOf(false)
+    // Goal held while the loop-mode MediaProjection consent dialog is up.
+    private var pendingLoopGoal: String? = null
     // Shown once the first time the user switches the permission mode to AUTO (放行).
     private var showAutoModeNotice by mutableStateOf(false)
 
@@ -209,6 +212,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     private lateinit var mediaProjectionManager: MediaProjectionManager
     private lateinit var projectionLauncher: ActivityResultLauncher<Intent>
+    private lateinit var loopProjectionLauncher: ActivityResultLauncher<Intent>
     private lateinit var speechLauncher: ActivityResultLauncher<Intent>
     private lateinit var audioPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var notificationPermissionLauncher: ActivityResultLauncher<String>
@@ -259,6 +263,25 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 Toast.makeText(this, "Screen capture permission is required to start.", Toast.LENGTH_SHORT).show()
             }
             pendingPlan = null
+        }
+
+        // Loop mode owns its own projection consent so take_screenshot and the
+        // post-action observations carry real frames (agent-loop.md §7). Declining
+        // is allowed: the loop degrades to UI-tree-only, which is the pre-wiring
+        // behavior, and the system prompt stops promising screenshots.
+        loopProjectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val goal = pendingLoopGoal
+            pendingLoopGoal = null
+            if (goal == null) return@registerForActivityResult
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                AgentCaptureService.start(this, result.resultCode, result.data!!)
+                // The service binds the projection asynchronously; the ViewModel
+                // waits (bounded) for it before the loop's first observation.
+                launchAgentLoopNow(goal, awaitCaptureMs = 2000L)
+            } else {
+                Toast.makeText(this, "未授权录屏，Agent 将仅依靠界面树运行（无截图）", Toast.LENGTH_LONG).show()
+                launchAgentLoopNow(goal, awaitCaptureMs = 0L)
+            }
         }
 
         speechLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -676,7 +699,18 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         saveCurrentSession()
         // The ViewModel owns the agent lifecycle, so no stop call is needed here.
-        ioExecutor.shutdownNow()
+        // saveCurrentSession enqueues the final SharedPreferences mirror write on
+        // ioExecutor; drain it before killing the executor (shutdownNow would drop
+        // the just-enqueued task). Bounded so a stuck task cannot hang teardown.
+        ioExecutor.shutdown()
+        try {
+            if (!ioExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                ioExecutor.shutdownNow()
+            }
+        } catch (_: InterruptedException) {
+            ioExecutor.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
         textToSpeech?.stop()
         textToSpeech?.shutdown()
         textToSpeech = null
@@ -845,7 +879,9 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
 
     /**
      * Launch the experimental autonomous agent loop from a goal string.
-     * Like agent mode, it requires the accessibility service to be enabled.
+     * Like agent mode, it requires the accessibility service to be enabled, and it
+     * asks for MediaProjection consent so the model sees real screenshots; declining
+     * the projection falls back to UI-tree-only operation.
      */
     private fun startAgentLoopFromGoal(goal: String) {
         val trimmed = goal.trim()
@@ -865,10 +901,32 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+
+        // A still-active projection from an earlier run in this process can be reused
+        // directly. Checking isProjectionActive (not just instance != null) avoids
+        // reusing a service whose projection failed to bind or was revoked, which
+        // would leave the loop screenshot-blind.
+        if (AgentCaptureService.instance?.isProjectionActive() == true) {
+            launchAgentLoopNow(trimmed, awaitCaptureMs = 0L)
+            return
+        }
+        pendingLoopGoal = trimmed
+        mainViewModel.setStatusText("请授权录屏，让 Agent 能看到屏幕")
+        try {
+            loopProjectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
+        } catch (e: Exception) {
+            // No consent UI available (e.g. restricted profile): degrade to tree-only.
+            pendingLoopGoal = null
+            launchAgentLoopNow(trimmed, awaitCaptureMs = 0L)
+        }
+    }
+
+    /** Shared tail of both loop-start paths (with or without a projection grant). */
+    private fun launchAgentLoopNow(goal: String, awaitCaptureMs: Long) {
         readyPlan = null
         candidateApps.clear()
         mainViewModel.setStatusText("自主 Agent 正在运行")
-        mainViewModel.startAgentLoop(trimmed)
+        mainViewModel.startAgentLoop(goal, awaitCaptureMs)
         // Floating stop button mirrors the fixed pipeline so the loop can be stopped from any app.
         try { AgentStopOverlayService.start(this) } catch (_: Exception) {}
     }
@@ -1006,7 +1064,11 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         val session = chatSessions.find { it.id == currentSessionId } ?: return
         session.messages.clear()
         session.messages.addAll(messages.map { ChatMsg(it.role, it.content) })
-        ChatStorage.saveSessions(this, chatSessions.toList())
+        // Serialize the legacy SharedPreferences mirror off the main thread (Room is
+        // the primary store via saveSessionToDb); the single-thread ioExecutor keeps
+        // these writes ordered, matching autoGenerateTitleIfNeeded.
+        val snapshot = chatSessions.toList()
+        ioExecutor.execute { ChatStorage.saveSessions(this, snapshot) }
         mainViewModel.saveSessionToDb(session)
     }
 
@@ -1573,7 +1635,7 @@ private fun GuideScreen(
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = buildMarkdownAnnotatedString(msg.content),
+                            text = remember(msg.content) { buildMarkdownAnnotatedString(msg.content) },
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFF374151),
                             lineHeight = MaterialTheme.typography.bodyMedium.lineHeight,
@@ -1949,11 +2011,16 @@ private fun TypingDots() {
     }
 }
 
+/** Inline **bold** / `code` pattern, compiled once instead of per line per recomposition. */
+private val MARKDOWN_INLINE_PATTERN = Regex("""(\*\*(.+?)\*\*)|(`(.+?)`)""")
+
 /**
  * Simple Markdown-to-AnnotatedString parser.
  * Supports **bold**, `inline code`, and `-`/`•` lists.
+ *
+ * Not @Composable (it calls no composables); callers wrap it in remember(text) so the
+ * AnnotatedString is rebuilt only when the message text changes, not on every recomposition.
  */
-@Composable
 private fun buildMarkdownAnnotatedString(text: String) = buildAnnotatedString {
     val lines = text.split("\n")
     lines.forEachIndexed { lineIdx, line ->
@@ -1966,9 +2033,8 @@ private fun buildMarkdownAnnotatedString(text: String) = buildAnnotatedString {
         if (prefix.isNotEmpty()) append(prefix)
 
         // Parse inline **bold** and `code`
-        val pattern = Regex("""(\*\*(.+?)\*\*)|(`(.+?)`)""")
         var lastEnd = 0
-        pattern.findAll(rest).forEach { match ->
+        MARKDOWN_INLINE_PATTERN.findAll(rest).forEach { match ->
             if (match.range.first > lastEnd) append(rest.substring(lastEnd, match.range.first))
             when {
                 match.groupValues[1].isNotEmpty() -> {

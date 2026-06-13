@@ -13,7 +13,7 @@ import {
   assertGuideMediaEnv,
   assertInternalJobEnv,
 } from "@/lib/mobile-agent/env";
-import { createMediaJob, updateMediaJob } from "@/lib/mobile-agent/persistence";
+import { createMediaJob, updateMediaJob, getMediaJob } from "@/lib/mobile-agent/persistence";
 
 // Poll cadence for the Veo long-running operation.
 const POLL_DELAY_SECONDS = 30;
@@ -124,6 +124,34 @@ function buildRecapPrompt(payload: SessionRecapPayload): string {
 
 export async function processSessionRecapVideoJob(payload: SessionRecapPayload) {
   if (!ENABLE_SESSION_RECAP_VIDEO) return;
+
+  // Idempotency: Cloud Tasks can redeliver this job. If a prior attempt already
+  // submitted to Veo (operation_name recorded), do NOT submit again — that would
+  // bill a second generation. Re-enqueue the poll for the existing operation and
+  // return. If the read fails, fall through to normal submission (no worse than
+  // the prior behavior).
+  try {
+    const existing = await getMediaJob(payload.job_id);
+    if (existing?.operation_name) {
+      if (isCloudTasksConfigured()) {
+        await enqueueRecapTask(
+          {
+            ...payload,
+            action: "poll",
+            operation_name: existing.operation_name,
+            attempt: 1,
+          },
+          POLL_DELAY_SECONDS,
+        );
+      }
+      return;
+    }
+  } catch (error) {
+    console.warn(
+      `[session-recap-video] idempotency check failed for job ${payload.job_id}; proceeding`,
+      error,
+    );
+  }
 
   try {
     assertGuideMediaEnv();

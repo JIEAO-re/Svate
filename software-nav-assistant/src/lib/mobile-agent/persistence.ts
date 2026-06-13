@@ -324,6 +324,22 @@ export async function updateMediaJob(
   );
 }
 
+/**
+ * Read a media job's current status and operation name, or null if it does not
+ * exist. Used for Cloud Tasks idempotency so a retried job does not re-submit an
+ * already-submitted long-running operation.
+ */
+export async function getMediaJob(
+  jobId: string,
+): Promise<{ status: MediaJobStatus; operation_name: string | null } | null> {
+  const db = getPool();
+  const res = await db.query<{ status: MediaJobStatus; operation_name: string | null }>(
+    `SELECT status, operation_name FROM agent_media_jobs WHERE job_id = $1 LIMIT 1`,
+    [jobId],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function saveShadowDiff(record: ShadowDiffRecord) {
   const db = getPool();
   await db.query(
@@ -354,12 +370,27 @@ export async function saveShadowDiff(record: ShadowDiffRecord) {
 export async function saveTelemetryEvents(events: TelemetryEvent[]) {
   if (events.length === 0) return;
 
+  // ON CONFLICT DO NOTHING resolves duplicates against already-stored rows, but a
+  // single INSERT that lists the same client_event_id twice (a buggy/retried
+  // client batch) raises "cannot affect row a second time" and rolls back the
+  // whole batch. Drop intra-request duplicates up front, keeping the first; events
+  // without a client_event_id are always kept.
+  const seenClientIds = new Set<string>();
+  const deduped = events.filter((event) => {
+    const id = event.client_event_id;
+    if (!id) return true;
+    if (seenClientIds.has(id)) return false;
+    seenClientIds.add(id);
+    return true;
+  });
+  if (deduped.length === 0) return;
+
   const db = getPool();
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    for (let offset = 0; offset < events.length; offset += TELEMETRY_BATCH_SIZE) {
-      const batch = events.slice(offset, offset + TELEMETRY_BATCH_SIZE);
+    for (let offset = 0; offset < deduped.length; offset += TELEMETRY_BATCH_SIZE) {
+      const batch = deduped.slice(offset, offset + TELEMETRY_BATCH_SIZE);
       const values: Array<string | number | null> = [];
       const rows = batch.map((event, index) => {
         const baseIndex = index * 7;

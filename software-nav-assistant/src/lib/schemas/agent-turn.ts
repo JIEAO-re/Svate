@@ -27,9 +27,11 @@ const TextPartSchema = z.object({
 });
 
 const InlineImagePartSchema = z.object({
-  inline_image_base64: z.string().min(1),
+  // Bounded well above a realistic screenshot (a scaled JPEG base64 is well under
+  // 1 MB) so an oversized device payload cannot balloon the model request.
+  inline_image_base64: z.string().min(1).max(12_000_000),
   // IANA mime type for the inline image, e.g. "image/jpeg".
-  mime_type: z.string().min(1),
+  mime_type: z.string().min(1).max(64),
 });
 
 const FunctionCallPartSchema = z.object({
@@ -83,10 +85,11 @@ export const GenerationConfigSchema = z.object({
 export const AgentTurnRequestSchema = z.object({
   session_id: IdentifierSchema,
   trace_id: IdentifierSchema,
-  // Full system prompt text, built on the device.
-  system_instruction: z.string().default(""),
-  contents: z.array(AgentContentSchema).min(1),
-  tools: z.array(ToolDeclarationSchema).default([]),
+  // Full system prompt text, built on the device. Bounded to reject a runaway
+  // device payload while leaving ample headroom over the ~1-2 KB prompt.
+  system_instruction: z.string().max(40_000).default(""),
+  contents: z.array(AgentContentSchema).min(1).max(400),
+  tools: z.array(ToolDeclarationSchema).max(64).default([]),
   generation: GenerationConfigSchema.optional(),
 });
 

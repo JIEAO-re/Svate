@@ -30,9 +30,25 @@ import kotlin.math.roundToInt
 class GuideCaptureService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
-    private var isAnalyzing = false
-    private var preferDirection = "LEFT"
-    private var consecutiveMisses = 0
+    // Touched from both the main thread (capture guard) and the worker thread
+    // (reset + direction/miss bookkeeping); @Volatile gives the needed visibility.
+    @Volatile private var isAnalyzing = false
+    @Volatile private var preferDirection = "LEFT"
+    @Volatile private var consecutiveMisses = 0
+
+    /**
+     * Required on API 34+ before createVirtualDisplay; also fires when the user
+     * revokes the projection. Tearing down here keeps capture from running blind.
+     */
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            // User revoked the projection: tear down and stop the service so the
+            // mediaProjection-type foreground service does not linger projection-less.
+            // stopProjection unregisters this callback before projection.stop().
+            stopProjection()
+            stopSelf()
+        }
+    }
 
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
@@ -55,7 +71,6 @@ class GuideCaptureService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopSelf()
-                return START_NOT_STICKY
             }
 
             ACTION_START -> {
@@ -79,12 +94,21 @@ class GuideCaptureService : Service() {
                 } else {
                     startForeground(NOTIFICATION_ID, buildNotification())
                 }
-                startProjection(resultCode, resultData)
+                if (!startProjection(resultCode, resultData)) {
+                    // Projection failed to bind (e.g. createVirtualDisplay threw);
+                    // do not run a capture loop that can never produce frames.
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 mainHandler.removeCallbacks(captureRunnable)
                 mainHandler.post(captureRunnable)
             }
+
+            // A sticky restart redelivers a null intent without the projection grant,
+            // which can never call startForeground in time; never auto-restart.
+            else -> stopSelf()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -97,26 +121,37 @@ class GuideCaptureService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startProjection(resultCode: Int, resultData: Intent) {
-        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        projection = manager.getMediaProjection(resultCode, resultData)
+    /** Returns true when the projection bound and a virtual display was created. */
+    private fun startProjection(resultCode: Int, resultData: Intent): Boolean {
+        return try {
+            val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            projection = manager.getMediaProjection(resultCode, resultData)
 
-        val metrics = resources.displayMetrics
-        width = max(720, metrics.widthPixels)
-        height = max(1280, metrics.heightPixels)
-        density = metrics.densityDpi
+            // Required on API 34+ before createVirtualDisplay (see projectionCallback).
+            projection?.registerCallback(projectionCallback, mainHandler)
 
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = projection?.createVirtualDisplay(
-            "ui-guide-capture",
-            width,
-            height,
-            density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            null,
-        )
+            val metrics = resources.displayMetrics
+            width = max(720, metrics.widthPixels)
+            height = max(1280, metrics.heightPixels)
+            density = metrics.densityDpi
+
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            virtualDisplay = projection?.createVirtualDisplay(
+                "ui-guide-capture",
+                width,
+                height,
+                density,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader?.surface,
+                null,
+                null,
+            )
+            virtualDisplay != null
+        } catch (t: Throwable) {
+            android.util.Log.e("GuideCaptureService", "startProjection failed", t)
+            stopProjection()
+            false
+        }
     }
 
     private fun stopProjection() {
@@ -124,6 +159,10 @@ class GuideCaptureService : Service() {
         virtualDisplay = null
         imageReader?.close()
         imageReader = null
+        try {
+            projection?.unregisterCallback(projectionCallback)
+        } catch (_: Throwable) {
+        }
         projection?.stop()
         projection = null
     }
@@ -206,32 +245,43 @@ class GuideCaptureService : Service() {
         val rowStride = plane.rowStride
         val rowPadding = rowStride - pixelStride * imageWidth
 
-        val bitmap = Bitmap.createBitmap(
-            imageWidth + rowPadding / pixelStride,
-            imageHeight,
-            Bitmap.Config.ARGB_8888,
-        )
-        bitmap.copyPixelsFromBuffer(buffer)
-        val cropped = Bitmap.createBitmap(bitmap, 0, 0, imageWidth, imageHeight)
+        var bitmap: Bitmap? = null
+        var cropped: Bitmap? = null
+        var scaled: Bitmap? = null
+        try {
+            bitmap = Bitmap.createBitmap(
+                imageWidth + rowPadding / pixelStride,
+                imageHeight,
+                Bitmap.Config.ARGB_8888,
+            )
+            bitmap.copyPixelsFromBuffer(buffer)
+            cropped = Bitmap.createBitmap(bitmap, 0, 0, imageWidth, imageHeight)
 
-        val maxDimension = 800
-        val scale = if (cropped.width >= cropped.height) {
-            maxDimension.toFloat() / cropped.width.toFloat()
-        } else {
-            maxDimension.toFloat() / cropped.height.toFloat()
-        }.coerceAtMost(1f)
+            val maxDimension = 800
+            val scale = if (cropped.width >= cropped.height) {
+                maxDimension.toFloat() / cropped.width.toFloat()
+            } else {
+                maxDimension.toFloat() / cropped.height.toFloat()
+            }.coerceAtMost(1f)
 
-        val scaled = Bitmap.createScaledBitmap(
-            cropped,
-            (cropped.width * scale).roundToInt().coerceAtLeast(1),
-            (cropped.height * scale).roundToInt().coerceAtLeast(1),
-            true,
-        )
+            scaled = Bitmap.createScaledBitmap(
+                cropped,
+                (cropped.width * scale).roundToInt().coerceAtLeast(1),
+                (cropped.height * scale).roundToInt().coerceAtLeast(1),
+                true,
+            )
 
-        val output = ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 70, output)
-        val bytes = output.toByteArray()
-        return Base64.encodeToString(bytes, Base64.NO_WRAP)
+            val output = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 70, output)
+            val bytes = output.toByteArray()
+            return Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } finally {
+            // Recycle every intermediate bitmap; this path runs ~1/second, so leaking
+            // three full-screen bitmaps per frame otherwise churns native memory.
+            if (scaled != null && scaled !== cropped) scaled.recycle()
+            if (cropped != null && cropped !== bitmap) cropped.recycle()
+            bitmap?.recycle()
+        }
     }
 
     private fun buildNotification(): Notification {

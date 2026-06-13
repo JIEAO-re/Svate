@@ -228,12 +228,16 @@ object PopupRecovery {
      * English keywords use word-boundary matching so short words like "ok" or
      * "close" do not false-match inside "look" or "disclose".
      */
+    /** Compiled word-boundary regexes per English keyword, built once and reused. */
+    private val keywordRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
     private fun matchesKeyword(content: String, keyword: String): Boolean {
         return if (keyword.any { it.code > 127 }) {
             content.contains(keyword)
         } else {
-            Regex("\\b${Regex.escape(keyword)}\\b", RegexOption.IGNORE_CASE)
-                .containsMatchIn(content)
+            keywordRegexCache.getOrPut(keyword) {
+                Regex("\\b${Regex.escape(keyword)}\\b", RegexOption.IGNORE_CASE)
+            }.containsMatchIn(content)
         }
     }
 

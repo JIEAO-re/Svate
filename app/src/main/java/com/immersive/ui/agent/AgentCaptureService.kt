@@ -51,11 +51,27 @@ class AgentCaptureService : Service() {
     private val lastCaptureAtMs = AtomicLong(0L)
     private val imageListenerHandler by lazy { Handler(Looper.getMainLooper()) }
 
+    /**
+     * API 34+ requires a MediaProjection.Callback to be registered before
+     * createVirtualDisplay, otherwise the framework throws IllegalStateException
+     * ("Must register a callback before starting capture"). onStop also fires when
+     * the user revokes the projection from the system UI, so we tear down then.
+     */
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            // User revoked the projection (or the system stopped it): tear down and
+            // stop the service so a mediaProjection-type foreground service does not
+            // linger without an active projection. stopProjection unregisters this
+            // callback before projection.stop(), so this never re-enters.
+            stopProjection()
+            stopSelf()
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopSelf()
-                return START_NOT_STICKY
             }
 
             ACTION_START -> {
@@ -80,8 +96,12 @@ class AgentCaptureService : Service() {
                 startProjection(resultCode, resultData)
                 instance = this
             }
+
+            // A sticky restart redelivers a null intent without the projection
+            // grant, leaving a useless service alive; never restart automatically.
+            else -> stopSelf()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -100,6 +120,9 @@ class AgentCaptureService : Service() {
         try {
             val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             projection = manager.getMediaProjection(resultCode, resultData)
+
+            // Required on API 34+ before createVirtualDisplay (see projectionCallback).
+            projection?.registerCallback(projectionCallback, imageListenerHandler)
 
             val metrics = resources.displayMetrics
             screenWidth = max(720, metrics.widthPixels)
@@ -132,12 +155,20 @@ class AgentCaptureService : Service() {
         }
         imageReader = null
         try {
+            projection?.unregisterCallback(projectionCallback)
+        } catch (t: Throwable) {
+            Log.w(TAG, "projection unregisterCallback failed", t)
+        }
+        try {
             projection?.stop()
         } catch (t: Throwable) {
             Log.w(TAG, "projection stop failed", t)
         }
         projection = null
     }
+
+    /** True only when a projection is bound and frames can actually be captured. */
+    fun isProjectionActive(): Boolean = projection != null && imageReader != null
 
     /**
      * Capture the current screen and return a Base64-encoded JPEG.
@@ -296,9 +327,14 @@ class AgentCaptureService : Service() {
                     } catch (_: Throwable) {
                         null
                     }
-                    if (img != null && cont.isActive) {
+                    if (img == null) return@OnImageAvailableListener
+                    if (cont.isActive) {
                         source.setOnImageAvailableListener(null, null)
                         cont.resume(img)
+                    } else {
+                        // Resumed/cancelled already: close the late frame so it is not
+                        // leaked. With maxImages=2, two leaked images brick capture.
+                        img.close()
                     }
                 }
                 reader.setOnImageAvailableListener(listener, imageListenerHandler)

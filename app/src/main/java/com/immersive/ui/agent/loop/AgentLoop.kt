@@ -161,26 +161,35 @@ class AgentLoop(
                 return
             }
 
+            // A truncated (MAX_TOKENS) turn may carry partial narration AND incomplete
+            // tool calls. Handle it before anything else: do not append the partial
+            // model text (it would leave the history ending on a model role, which
+            // Gemini rejects next turn) and never execute possibly-incomplete calls.
+            // Append a user nudge so the conversation stays valid, then let the
+            // failure budget decide whether to stop.
+            if (response.meta.truncated) {
+                state.appendUserText(
+                    "(Your previous reply was cut off because it reached the length limit. " +
+                        "Continue with a single concise next step.)",
+                )
+                val terminal = checkBudgetAfterFailure("model output truncated")
+                if (terminal) return
+                continue
+            }
+
             response.text?.let { narration ->
                 state.appendModelText(narration)
                 emit(AgentLoopEvent.Narration(narration))
             }
 
             // No tool calls this turn: distinguish a real completion from a
-            // degraded/truncated turn before reporting success (meta contract).
+            // degraded turn before reporting success (meta contract).
             if (response.toolCalls.isEmpty()) {
                 if (response.meta.toolCallsUnsupported) {
                     // The backend could not execute tools; the model only returned
                     // text, so the loop cannot make progress.
                     emit(AgentLoopEvent.Failed("后端不支持工具调用,无法自主执行"))
                     return
-                }
-                if (response.meta.truncated) {
-                    // MAX_TOKENS cut the output off: treat as a failed turn, not a
-                    // completion, and let the failure budget decide whether to stop.
-                    val terminal = checkBudgetAfterFailure("model output truncated")
-                    if (terminal) return
-                    continue
                 }
                 // Genuine completion: the model is done.
                 emit(AgentLoopEvent.Finished(success = true, summary = response.text ?: "Done."))
@@ -255,34 +264,48 @@ class AgentLoop(
 
     /** Execute a granted/allowed tool, append its response, and handle finish/budget. */
     private suspend fun executeAndRecord(call: TurnToolCall, tool: PhoneTool): Boolean {
-        val result = try {
+        var result = try {
             tool.execute(call.args, toolContext)
         } catch (t: Throwable) {
             if (t is kotlinx.coroutines.CancellationException) throw t
             ToolResult(ok = false, text = "tool threw: ${t.message}")
         }
 
-        emit(AgentLoopEvent.ToolFinished(call.name, ok = result.ok, summary = result.text))
-
         // finish terminates the loop with the model's summary.
         if (call.name == ToolRegistry.FINISH_TOOL) {
+            emit(AgentLoopEvent.ToolFinished(call.name, ok = result.ok, summary = result.text))
             state.appendFunctionResponse(call.name, successResponse(result.text))
             emit(AgentLoopEvent.Finished(success = result.ok, summary = result.text))
             return true
         }
 
-        // After a successful write tool, capture a fresh post-action observation.
-        // The Gemini contract requires every model[function_call] to be directly
-        // followed by its function[function_response] (agent-loop.md §2/§6), so the
-        // observation text is merged into the response itself and the screenshot
-        // image is appended as a *separate* user observation AFTER the response.
-        val observationText = if (!tool.isReadOnly && result.ok) buildObservationText() else null
-        val observationImage = if (!tool.isReadOnly && result.ok) captureObservationImage() else null
-        val attached = observationText != null
+        // After a successful write tool — or an explicit take_screenshot, whose whole
+        // purpose is the image — capture a fresh observation. The Gemini contract
+        // requires every model[function_call] to be directly followed by its
+        // function[function_response] (agent-loop.md §2/§6), so the observation text
+        // is merged into the response itself and the screenshot image is appended as
+        // a *separate* user observation AFTER the response.
+        val wantsObservation = result.ok &&
+            (!tool.isReadOnly || call.name == ToolRegistry.SCREENSHOT_TOOL)
+        val observationText = if (wantsObservation) buildObservationText() else null
+        val observationImage = if (wantsObservation) captureObservationImage() else null
 
+        // take_screenshot with no frame is a failure the model must hear about,
+        // not a success with a silently missing image.
+        if (call.name == ToolRegistry.SCREENSHOT_TOOL && result.ok && observationImage.isNullOrBlank()) {
+            result = ToolResult(
+                ok = false,
+                text = "Screenshot capture returned no frame (screen recording may not be authorized); use read_ui_tree instead.",
+            )
+        }
+
+        emit(AgentLoopEvent.ToolFinished(call.name, ok = result.ok, summary = result.text))
+
+        val attached = observationText != null && result.ok
         val response = if (result.ok) successResponse(result.text) else errorResponse(result.text)
         response.put("observation_attached", attached)
-        if (observationText != null) {
+        // observationText is non-null whenever attached is true.
+        if (attached) {
             response.put("observation", observationText)
         }
         // function_response immediately follows its function_call (no user entry
@@ -293,7 +316,7 @@ class AgentLoop(
         // so the model still sees the resulting screen image.
         if (attached) {
             state.appendObservation(
-                text = "(post-action screen)",
+                text = if (call.name == ToolRegistry.SCREENSHOT_TOOL) "(current screen)" else "(post-action screen)",
                 imageBase64 = observationImage,
             )
         }
@@ -565,17 +588,33 @@ class AgentLoop(
     }
 
     private fun buildSystemInstruction(): String {
+        // Rebuilt every turn so the prompt tracks live screenshot availability
+        // (agent-loop.md §7: never promise screenshots the device cannot deliver).
+        val screenshotsAvailable = toolContext.capture() != null
         return buildString {
             appendLine("You are an on-device Android UI automation agent.")
             appendLine("You drive a real phone by calling the provided tools one step at a time.")
             appendLine()
-            appendLine("Tools: take_screenshot and read_ui_tree observe the screen; tap/type_text/swipe/")
-            appendLine("scroll/press_back/press_home/open_app/launch_intent act on it; wait pauses; finish")
-            appendLine("ends the task; ask_user asks the user a clarifying question.")
+            if (screenshotsAvailable) {
+                appendLine("Tools: take_screenshot and read_ui_tree observe the screen; tap/type_text/swipe/")
+                appendLine("scroll/press_back/press_home/open_app/launch_intent act on it; wait pauses; finish")
+                appendLine("ends the task; ask_user asks the user a clarifying question.")
+            } else {
+                appendLine("Tools: read_ui_tree observes the screen. Screen recording is NOT authorized in this")
+                appendLine("session, so take_screenshot is unavailable and no screenshots will be attached —")
+                appendLine("rely entirely on read_ui_tree. tap/type_text/swipe/scroll/press_back/press_home/")
+                appendLine("open_app/launch_intent act on the screen; wait pauses; finish ends the task;")
+                appendLine("ask_user asks the user a clarifying question.")
+            }
             appendLine()
             appendLine("Targeting: prefer tapping by the bounds shown in read_ui_tree (use the center as x/y),")
-            appendLine("or pass som_id (the node index), or a selector matching exact visible text. Read the")
-            appendLine("latest screenshot and UI nodes before each action.")
+            if (screenshotsAvailable) {
+                appendLine("or pass som_id (the node index), or a selector matching exact visible text. Read the")
+                appendLine("latest screenshot and UI nodes before each action.")
+            } else {
+                appendLine("or pass som_id (the node index), or a selector matching exact visible text. Read the")
+                appendLine("latest UI nodes before each action.")
+            }
             appendLine()
             appendLine("som_id stability: a som_id is only valid for the exact frame you just got from")
             appendLine("read_ui_tree. As soon as the screen changes (after any tap/type/scroll/navigation, or")

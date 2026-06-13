@@ -171,12 +171,18 @@ The UI exposes a mode toggle (ASK / AUTO) and routes the new "agent loop" mode t
 The loop compiles and its pure logic is unit-tested, but it has **not** been
 validated end to end on a real device. Before that happens:
 
-- **MediaProjection is not wired into loop mode.** `AgentCaptureService` needs an
-  active projection (a user consent dialog) to capture frames; loop mode currently
-  skips that flow, so `take_screenshot` and observation images return nothing and
-  the agent runs **UI-tree-only** (`read_ui_tree` still works — nodes carry pixel
-  bounds, so `tap {x,y}` is viable). Wiring the projection consent into loop startup
-  is the first P2 task; until then the system prompt should not promise screenshots.
+- **MediaProjection wiring (done).** Loop startup now requests projection consent via
+  `loopProjectionLauncher` and starts `AgentCaptureService`, so `take_screenshot` and
+  the post-action observations carry real frames. The flow degrades gracefully: if the
+  user declines consent (or no consent UI exists), the loop runs **UI-tree-only**
+  (`read_ui_tree` still works — nodes carry pixel bounds, so `tap {x,y}` is viable) and
+  the system prompt is rebuilt each turn to stop promising screenshots when capture is
+  unavailable (`AgentLoop.buildSystemInstruction` keys off `toolContext.capture()`).
+  `take_screenshot` returning no frame is reported back to the model as a tool failure,
+  not a silent success. The capture service is stopped on every loop-teardown path
+  (`MainViewModel.stopLoopSideServices`) and uses `START_NOT_STICKY` so a system-killed
+  projection never auto-restarts without its grant. Real-device validation of the live
+  capture path is still pending.
 - **Streaming narration** is deferred; the proxy returns one response per turn.
 - **Gemini `parametersJsonSchema`** support depends on the installed `@google/genai`
   version exposing that field (it type-checks today); verify against the live API.

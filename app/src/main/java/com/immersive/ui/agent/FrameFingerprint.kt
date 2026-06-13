@@ -4,6 +4,14 @@ import java.security.MessageDigest
 
 object FrameFingerprint {
 
+    private val HEX = "0123456789abcdef".toCharArray()
+
+    /** Append the two lowercase hex digits of a byte without a Formatter allocation. */
+    private fun StringBuilder.appendHex(value: Int) {
+        append(HEX[(value ushr 4) and 0xF])
+        append(HEX[value and 0xF])
+    }
+
     fun build(
         foregroundPackage: String?,
         uiNodes: List<UiNode>,
@@ -45,7 +53,7 @@ object FrameFingerprint {
             val step = (bytes.size - 1).toDouble() / maxOf(1, count - 1)
             for (i in 0 until count) {
                 val index = (i * step).toInt().coerceIn(0, bytes.size - 1)
-                sb.append("%02x".format(bytes[index].toInt() and 0xff))
+                sb.appendHex(bytes[index].toInt() and 0xff)
             }
         }
         sb.append("#len=").append(bytes.size)
@@ -64,7 +72,7 @@ object FrameFingerprint {
         val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
         val sb = StringBuilder(digest.size * 2)
         for (b in digest) {
-            sb.append("%02x".format(b))
+            sb.appendHex(b.toInt() and 0xff)
         }
         return sb.toString()
     }

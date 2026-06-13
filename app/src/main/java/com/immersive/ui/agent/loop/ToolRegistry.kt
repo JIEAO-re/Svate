@@ -54,6 +54,7 @@ class ToolRegistry private constructor(
     companion object {
         const val FINISH_TOOL = "finish"
         const val ASK_USER_TOOL = "ask_user"
+        const val SCREENSHOT_TOOL = "take_screenshot"
 
         /** Build the default v1 registry in a stable, documented order. */
         fun createDefault(): ToolRegistry {

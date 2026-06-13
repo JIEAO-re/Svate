@@ -493,7 +493,9 @@ Rules:
 
         val code = connection.responseCode
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val body = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+        // errorStream is null when the connection failed before producing a body;
+        // read defensively so an error response never NPEs.
+        val body = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
         if (code !in 200..299) {
             throw IllegalStateException("chat-goal failed: HTTP $code | $body")
         }
@@ -556,7 +558,9 @@ Rules:
 
         val code = connection.responseCode
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val body = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+        // errorStream is null when the connection failed before producing a body;
+        // read defensively so an error response never NPEs.
+        val body = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
         if (code !in 200..299) {
             throw IllegalStateException("BFF gemini-json failed: HTTP $code | $body")
         }

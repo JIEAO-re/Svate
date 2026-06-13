@@ -7,9 +7,10 @@ import com.immersive.ui.agent.loop.ToolResult
 import org.json.JSONObject
 
 /**
- * Capture the current screen as a JPEG. The loop is responsible for attaching the
- * actual image bytes to the latest observation; this tool only confirms a capture
- * succeeded so the model knows a fresh frame is available.
+ * Capture the current screen as a JPEG. The loop captures the canonical frame and
+ * attaches it to the observation that follows this tool's function_response;
+ * capturing here as well would burn a second frame (and a throttle slot) per call,
+ * so this tool only verifies the capture service is reachable.
  */
 class TakeScreenshotTool : PhoneTool {
     override val name: String = "take_screenshot"
@@ -21,13 +22,9 @@ class TakeScreenshotTool : PhoneTool {
     override fun parametersJsonSchema(): String = ToolSupport.emptySchema()
 
     override suspend fun execute(args: JSONObject, ctx: ToolContext): ToolResult {
-        val capture = ctx.capture()
+        ctx.capture()
             ?: return ToolResult(ok = false, text = "Capture service unavailable; screenshot not taken.")
-        val bytes = capture.captureBytes()
-        return if (bytes != null && bytes.isNotEmpty()) {
-            ToolResult(ok = true, text = "Screenshot captured (${bytes.size} bytes).")
-        } else {
-            ToolResult(ok = false, text = "Screenshot capture returned no frame.")
-        }
+        // The loop flips this to a failure if the capture yields no frame.
+        return ToolResult(ok = true, text = "Screenshot captured; image attached as the next observation.")
     }
 }

@@ -204,7 +204,15 @@ Rules:
     });
 
     const responseText = response.text || "{}";
-    const parsedResponse = ChatGoalResponseSchema.safeParse(JSON.parse(responseText));
+    // The model can return non-JSON despite responseMimeType=application/json;
+    // a raw JSON.parse throw must degrade to the deterministic fallback, not a 500.
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(responseText);
+    } catch {
+      return NextResponse.json({ success: true, ...buildFallback(messages) });
+    }
+    const parsedResponse = ChatGoalResponseSchema.safeParse(parsedJson);
     if (!parsedResponse.success) {
       return NextResponse.json({ success: true, ...buildFallback(messages) });
     }

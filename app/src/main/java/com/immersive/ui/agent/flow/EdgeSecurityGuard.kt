@@ -73,6 +73,9 @@ class EdgeSecurityGuard(
     // ========== P2 visual injection guard ==========
     private val injectionGuard = VisualInjectionGuard()
 
+    /** Compiled word-boundary regexes per English keyword, built once and reused. */
+    private val keywordRegexCache = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+
     // ========== User confirmation callback ==========
     var onRequestConfirm: ((AgentAction, (Boolean) -> Unit) -> Unit)? = null
 
@@ -315,7 +318,9 @@ class EdgeSecurityGuard(
             if (lowerKeyword.any { it.code > 127 }) {
                 lowerText.contains(lowerKeyword)
             } else {
-                Regex("\\b${Regex.escape(lowerKeyword)}\\b").containsMatchIn(lowerText)
+                keywordRegexCache.getOrPut(lowerKeyword) {
+                    Regex("\\b${Regex.escape(lowerKeyword)}\\b")
+                }.containsMatchIn(lowerText)
             }
         }
     }

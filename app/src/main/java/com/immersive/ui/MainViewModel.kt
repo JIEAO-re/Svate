@@ -2,6 +2,7 @@ package com.immersive.ui
 
 import android.app.Application
 import android.content.Context
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.immersive.ui.agent.AgentCaptureService
@@ -26,6 +27,7 @@ import com.immersive.ui.overlay.AgentStopOverlayService
 import com.immersive.ui.overlay.OverlayGuideService
 import com.immersive.ui.guide.GuideCaptureService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -171,6 +173,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _agentLoopRunning.value = false
                 _pendingPermission.value = null
                 _agentLoopPhase.value = ""
+                stopLoopSideServices()
                 val mark = if (event.success) "✅" else "⚠️"
                 appendNarration("$mark ${event.summary}")
                 viewModelScope.launch {
@@ -182,6 +185,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _agentLoopRunning.value = false
                 _pendingPermission.value = null
                 _agentLoopPhase.value = ""
+                stopLoopSideServices()
                 appendNarration("❌ ${event.reason}")
                 viewModelScope.launch {
                     _agentMessages.emit("❌ ${event.reason}")
@@ -191,8 +195,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Start the autonomous agent loop. Runs alongside the fixed pipeline; never both at once. */
-    fun startAgentLoop(goal: String) {
+    /**
+     * Start the autonomous agent loop. Runs alongside the fixed pipeline; never both at once.
+     *
+     * [awaitCaptureMs] > 0 waits (bounded) for [AgentCaptureService] to come up before
+     * the first turn, so a projection grant that is still binding does not race the
+     * loop's initial screenshot observation. 0 starts immediately (UI-tree-only when
+     * no projection is active).
+     */
+    fun startAgentLoop(goal: String, awaitCaptureMs: Long = 0L) {
         val trimmed = goal.trim()
         if (trimmed.isBlank() || _agentLoopRunning.value) return
         _agentLoopNarration.value = emptyList()
@@ -200,11 +211,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _agentLoopPhase.value = ""
         _agentLoopRunning.value = true
         agentLoop.mode = _permissionMode.value
-        try {
-            agentLoop.start(trimmed)
-        } catch (e: Exception) {
-            _agentLoopRunning.value = false
-            emitError("启动失败：${e.localizedMessage ?: "unknown_error"}")
+        viewModelScope.launch {
+            if (awaitCaptureMs > 0) {
+                val deadline = SystemClock.uptimeMillis() + awaitCaptureMs
+                // Wait for the projection to actually bind (not just the service to
+                // exist), so the loop's first observation can carry a real frame.
+                while (AgentCaptureService.instance?.isProjectionActive() != true &&
+                    SystemClock.uptimeMillis() < deadline
+                ) {
+                    delay(50)
+                }
+            }
+            // The user may have stopped during the (bounded) capture wait; do not
+            // start an invisible loop after a stop.
+            if (!_agentLoopRunning.value) return@launch
+            try {
+                agentLoop.start(trimmed)
+            } catch (e: Exception) {
+                _agentLoopRunning.value = false
+                stopLoopSideServices()
+                emitError("启动失败：${e.localizedMessage ?: "unknown_error"}")
+            }
         }
     }
 
@@ -213,6 +240,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _agentLoopRunning.value = false
         _pendingPermission.value = null
         _agentLoopPhase.value = ""
+        stopLoopSideServices()
+    }
+
+    /**
+     * Stop the services that accompany a loop run (screen capture, floating stop
+     * button). Idempotent; safe to call from any loop-teardown path. Without this,
+     * a loop that finishes on its own leaves the projection and overlay running.
+     */
+    private fun stopLoopSideServices() {
+        val appCtx = ctx.applicationContext
+        try { AgentCaptureService.stop(appCtx) } catch (_: Exception) {}
+        try { AgentStopOverlayService.stop(appCtx) } catch (_: Exception) {}
     }
 
     /** Forward the user's choice on a pending permission prompt back to the loop. */
