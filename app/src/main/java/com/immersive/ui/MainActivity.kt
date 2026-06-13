@@ -19,6 +19,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -73,6 +75,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -210,6 +213,13 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private var isTyping by mutableStateOf(false)
     private var isStoppingGuide = false
 
+    // User-configured OpenAI-compatible model endpoint (base URL / model / key),
+    // stored locally. When set, the device drives the model directly — no backend,
+    // no Gemini default.
+    private var endpointBaseUrl by mutableStateOf("")
+    private var endpointModel by mutableStateOf("")
+    private var endpointApiKey by mutableStateOf("")
+
     private lateinit var mediaProjectionManager: MediaProjectionManager
     private lateinit var projectionLauncher: ActivityResultLauncher<Intent>
     private lateinit var loopProjectionLauncher: ActivityResultLauncher<Intent>
@@ -230,6 +240,15 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
         isProfileExtractionEnabled = getSharedPreferences(SETTINGS_PREFS, MODE_PRIVATE)
             .getBoolean(KEY_PROFILE_EXTRACTION_ENABLED, false)
+
+        // Load the saved model endpoint and apply it so goal understanding routes
+        // to it immediately (the agent loop reads it fresh at each task start).
+        com.immersive.ui.agent.loop.ModelEndpointStore.load(this).let { cfg ->
+            endpointBaseUrl = cfg.baseUrl
+            endpointModel = cfg.model
+            endpointApiKey = cfg.apiKey
+            GuideAiEngines.setModelEndpoint(cfg)
+        }
 
         // Scan installed apps and inject them into the AI engine.
         val apps = InstalledAppScanner.getInstalledApps(this)
@@ -552,6 +571,46 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                         text = stringResource(R.string.mode_agent_loop_hint),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color(0xFF8E8EA0),
+                                    )
+                                }
+
+                                // Model endpoint (OpenAI-compatible): base URL / model / key,
+                                // stored locally. When set, the device drives the model directly.
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = "模型端点 (OpenAI 兼容)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        text = "填写后，设备直接连接此端点驱动 Agent，不经后端、不用 Gemini。留空则用默认后端。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF8E8EA0),
+                                    )
+                                    OutlinedTextField(
+                                        value = endpointBaseUrl,
+                                        onValueChange = { endpointBaseUrl = it.trim(); persistModelEndpoint() },
+                                        label = { Text("Base URL") },
+                                        placeholder = { Text("https://your-host/v1") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    OutlinedTextField(
+                                        value = endpointModel,
+                                        onValueChange = { endpointModel = it.trim(); persistModelEndpoint() },
+                                        label = { Text("模型名") },
+                                        placeholder = { Text("claude-opus-4-8") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    OutlinedTextField(
+                                        value = endpointApiKey,
+                                        onValueChange = { endpointApiKey = it.trim(); persistModelEndpoint() },
+                                        label = { Text("API Key") },
+                                        placeholder = { Text("sk-...") },
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
 
@@ -1003,6 +1062,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
             .edit()
             .putBoolean(KEY_PROFILE_EXTRACTION_ENABLED, isProfileExtractionEnabled)
             .apply()
+    }
+
+    /** Persist the model-endpoint fields and apply them to goal understanding. */
+    private fun persistModelEndpoint() {
+        val cfg = com.immersive.ui.agent.loop.EndpointConfig(
+            baseUrl = endpointBaseUrl,
+            model = endpointModel,
+            apiKey = endpointApiKey,
+        )
+        com.immersive.ui.agent.loop.ModelEndpointStore.save(this, cfg)
+        GuideAiEngines.setModelEndpoint(cfg)
     }
 
     private fun hasSeenAutoNotice(): Boolean =
@@ -1608,9 +1678,27 @@ private fun GuideScreen(
                     val timeText = remember(msg.timestamp) {
                         java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(msg.timestamp))
                     }
+                    // Spring entrance per message: non-linear fade + slide-up + scale.
+                    val enter = remember(msg.id) { Animatable(0f) }
+                    LaunchedEffect(msg.id) {
+                        enter.animateTo(
+                            targetValue = 1f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                        )
+                    }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .graphicsLayer {
+                                alpha = enter.value.coerceIn(0f, 1f)
+                                translationY = (1f - enter.value) * 36f
+                                val s = 0.94f + 0.06f * enter.value
+                                scaleX = s
+                                scaleY = s
+                            }
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(if (isAssistant) Color.White.copy(alpha = 0.7f) else Color(0xFFE8F1FC).copy(alpha = 0.7f))
@@ -1990,22 +2078,33 @@ private fun DrawerContent(
 @Composable
 private fun TypingDots() {
     val transition = rememberInfiniteTransition(label = "typing")
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
         repeat(3) { index ->
-            val alpha by transition.animateFloat(
-                initialValue = 0.3f,
+            // FastOutSlowInEasing gives each dot a non-linear rise/fall; the staggered
+            // delay makes the three dots ripple instead of blinking in unison.
+            val t by transition.animateFloat(
+                initialValue = 0f,
                 targetValue = 1f,
                 animationSpec = infiniteRepeatable(
-                    animation = tween(durationMillis = 500, delayMillis = index * 150),
+                    animation = tween(durationMillis = 620, delayMillis = index * 140, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse,
                 ),
                 label = "dot_$index",
             )
             Box(
                 modifier = Modifier
-                    .size(6.dp)
+                    .graphicsLayer {
+                        translationY = -7f * t
+                        val s = 0.7f + 0.55f * t
+                        scaleX = s
+                        scaleY = s
+                    }
+                    .size(7.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF8E8EA0).copy(alpha = alpha)),
+                    .background(Color(0xFF7C3AED).copy(alpha = 0.35f + 0.65f * t)),
             )
         }
     }

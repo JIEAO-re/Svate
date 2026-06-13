@@ -48,6 +48,23 @@ data class AgentTurnResponse(
 )
 
 /**
+ * One model turn for the agent loop. Implemented by [AgentTurnClient] (via the
+ * project backend) and [DirectOpenAiTurnClient] (device → user-configured
+ * OpenAI-compatible endpoint). The loop picks the implementation at start time.
+ */
+interface TurnClient {
+    suspend fun runTurn(
+        sessionId: String,
+        traceId: String,
+        systemInstruction: String,
+        contents: JSONArray,
+        tools: JSONArray,
+        temperature: Double = 0.2,
+        maxOutputTokens: Int = 2048,
+    ): AgentTurnResponse
+}
+
+/**
  * Thin client for `POST /api/mobile-agent/agent-turn`.
  *
  * Mirrors CloudDecisionClient exactly: BuildConfig base url/token/timeout, a
@@ -57,7 +74,7 @@ data class AgentTurnResponse(
  * dependency is introduced. The blocking I/O runs on Dispatchers.IO through
  * runInterruptible with an outer timeout.
  */
-class AgentTurnClient {
+class AgentTurnClient : TurnClient {
     private val baseUrl = BuildConfig.MOBILE_AGENT_BASE_URL.trimEnd('/')
 
     // Allow up to 60s to match the server's maxDuration = 60; the configured
@@ -75,14 +92,14 @@ class AgentTurnClient {
      * @param contents Gemini-style running conversation (Content[] JSON array).
      * @param tools tool declarations from ToolRegistry.toDeclarations().
      */
-    suspend fun runTurn(
+    override suspend fun runTurn(
         sessionId: String,
         traceId: String,
         systemInstruction: String,
         contents: JSONArray,
         tools: JSONArray,
-        temperature: Double = 0.2,
-        maxOutputTokens: Int = 2048,
+        temperature: Double,
+        maxOutputTokens: Int,
     ): AgentTurnResponse {
         val url = URL("$baseUrl/api/mobile-agent/agent-turn")
         requireSecureBaseUrl(url)

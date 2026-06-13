@@ -71,9 +71,13 @@ class AgentLoop(
     private val state = AgentLoopState(initialMode = mode)
     private val registry = ToolRegistry.createDefault()
     private val gate = PermissionGate()
-    private val turnClient = AgentTurnClient()
     private val injectionGuard = VisualInjectionGuard()
     private val toolContext = ToolContext(appContext.applicationContext, scope)
+
+    // Resolved per task in start(): a user-configured OpenAI-compatible endpoint
+    // (device talks to it directly) takes precedence over the project backend.
+    @Volatile
+    private var turnClient: TurnClient = AgentTurnClient()
 
     /** Pending permission prompts keyed by toolCallId. */
     private val pendingPermissions = ConcurrentHashMap<String, CompletableDeferred<PermissionDecision>>()
@@ -97,6 +101,12 @@ class AgentLoop(
         gate.clearRules()
         pendingPermissions.clear()
         sessionId = "loop_${System.currentTimeMillis()}"
+
+        // Pick the model transport for this task: a locally-configured
+        // OpenAI-compatible endpoint drives the model directly from the device
+        // (no backend, no Gemini default); otherwise fall back to the backend.
+        val endpoint = ModelEndpointStore.load(toolContext.appContext)
+        turnClient = if (endpoint.isConfigured()) DirectOpenAiTurnClient(endpoint) else AgentTurnClient()
 
         // Run the loop off the main thread; SharedFlow.emit is thread-safe and UI
         // collectors hop back to Main themselves.

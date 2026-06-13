@@ -1,6 +1,7 @@
 package com.immersive.ui.guide
 
 import com.immersive.ui.BuildConfig
+import com.immersive.ui.agent.loop.EndpointConfig
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -53,6 +54,16 @@ object GuideAiEngines {
         installedApps = apps
     }
 
+    // When set to a configured endpoint, goal understanding and screen analysis
+    // talk to the user's OpenAI-compatible endpoint directly instead of the
+    // project backend / Gemini. Null restores the backend behavior.
+    @Volatile
+    private var endpoint: EndpointConfig? = null
+
+    fun setModelEndpoint(config: EndpointConfig?) {
+        endpoint = config?.takeIf { it.isConfigured() }
+    }
+
     /**
      * Clarifies the user goal via the BFF, falling back to a generic model prompt.
      *
@@ -62,13 +73,18 @@ object GuideAiEngines {
      */
     fun chatForGoal(messages: List<SimpleChatMessage>, userProfile: String? = null): GoalChatResult {
         val fallback = fallbackChat(messages)
-        try {
-            val viaBff = requestChatGoalViaBff(messages, userProfile)
-            if (viaBff.reply.isNotBlank()) {
-                return viaBff
+        // With a user-configured endpoint, skip the project backend (and its Gemini
+        // default) entirely; the generic-prompt path below routes to the endpoint
+        // via requestGeminiJson.
+        if (endpoint == null) {
+            try {
+                val viaBff = requestChatGoalViaBff(messages, userProfile)
+                if (viaBff.reply.isNotBlank()) {
+                    return viaBff
+                }
+            } catch (_: Exception) {
+                // Fall through to generic model prompt fallback.
             }
-        } catch (_: Exception) {
-            // Fall through to generic model prompt fallback.
         }
 
         val latestUser = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
@@ -529,11 +545,73 @@ Rules:
         )
     }
 
+    /**
+     * Goal understanding / screen analysis via the user-configured endpoint: send
+     * the JSON-instruction prompt (plus an optional inline image) as a single user
+     * message to {base_url}/chat/completions and extract the JSON object from the
+     * reply. No backend, no Gemini.
+     */
+    private fun requestJsonViaEndpoint(ep: EndpointConfig, prompt: String, imageBase64: String?): JSONObject {
+        val url = URL("${ep.normalizedBaseUrl()}/chat/completions")
+        val content: Any = if (imageBase64.isNullOrBlank()) {
+            prompt
+        } else {
+            JSONArray()
+                .put(JSONObject().put("type", "text").put("text", prompt))
+                .put(
+                    JSONObject().put("type", "image_url").put(
+                        "image_url", JSONObject().put("url", "data:image/jpeg;base64,$imageBase64"),
+                    ),
+                )
+        }
+        val payload = JSONObject()
+            .put("model", ep.model)
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
+            .put("temperature", 0.2)
+
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20_000
+            readTimeout = 30_000
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (ep.apiKey.isNotBlank()) setRequestProperty("Authorization", "Bearer ${ep.apiKey}")
+        }
+        val body = try {
+            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { it.write(payload.toString()) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
+            if (code !in 200..299) {
+                throw IllegalStateException("endpoint chat/completions failed: HTTP $code | ${text.take(300)}")
+            }
+            text
+        } finally {
+            connection.disconnect()
+        }
+        val replyText = JSONObject(body).optJSONArray("choices")?.optJSONObject(0)
+            ?.optJSONObject("message")?.optString("content").orEmpty()
+        return extractJsonObject(replyText)
+    }
+
+    /** Extract the first JSON object from a model reply that may include prose/fences. */
+    private fun extractJsonObject(text: String): JSONObject {
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start in 0 until end) {
+            runCatching { return JSONObject(text.substring(start, end + 1)) }
+        }
+        return JSONObject(text) // throws if not JSON; the caller's try/catch falls back to local
+    }
+
     private fun requestGeminiJson(prompt: String, imageBase64: String?): JSONObject {
         return requestGeminiJsonPublic(prompt, imageBase64)
     }
 
     fun requestGeminiJsonPublic(prompt: String, imageBase64: String?): JSONObject {
+        endpoint?.let { ep ->
+            return requestJsonViaEndpoint(ep, prompt, imageBase64)
+        }
         val baseUrl = BuildConfig.MOBILE_AGENT_BASE_URL.trimEnd('/')
         val url = URL("$baseUrl/api/mobile-agent/internal/gemini-json")
         val connection = (url.openConnection() as HttpURLConnection).apply {
