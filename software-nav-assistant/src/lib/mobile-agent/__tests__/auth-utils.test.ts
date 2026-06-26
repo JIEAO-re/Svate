@@ -12,6 +12,11 @@ function resetEnv() {
   Object.assign(process.env, ORIGINAL_ENV);
 }
 
+// process.env.NODE_ENV is typed read-only in Next.js; tests need to override it.
+function setNodeEnv(value: string) {
+  (process.env as Record<string, string | undefined>).NODE_ENV = value;
+}
+
 describe("auth-utils", () => {
   beforeEach(() => {
     resetEnv();
@@ -22,7 +27,7 @@ describe("auth-utils", () => {
   });
 
   it("allows SKIP_AUTH_DEV only for localhost in development", async () => {
-    process.env.NODE_ENV = "development";
+    setNodeEnv("development");
     process.env.SKIP_AUTH_DEV = "true";
 
     const { authenticateRequest } = await import("@/lib/mobile-agent/auth-utils");

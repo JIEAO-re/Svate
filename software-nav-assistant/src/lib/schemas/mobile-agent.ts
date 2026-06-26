@@ -1,4 +1,31 @@
 import { z } from "zod";
+import {
+  SCREENSHOT_UPLOAD_BUCKET,
+  GUIDE_MEDIA_BUCKET,
+  LEGACY_GCS_BUCKET_NAME,
+  NODE_ENV,
+} from "@/lib/mobile-agent/env";
+
+/**
+ * A device-supplied gcs_uri is fed to the model directly as fileData, so the
+ * model reads that object with the server's own credentials. Restrict it to the
+ * app's configured buckets to prevent a malicious device from referencing any
+ * other bucket the service account can read (read-scope escalation / SSRF).
+ *
+ * When no bucket is configured the allowlist cannot be enforced. In production
+ * that is a misconfiguration we must not silently fall through on, so we fail
+ * closed (reject every gcs_uri). Outside production we stay permissive so local
+ * dev and tests can exercise gcs_uri frames without a bucket configured.
+ */
+function gcsUriBucketAllowed(uri: string): boolean {
+  const allowed = [SCREENSHOT_UPLOAD_BUCKET, GUIDE_MEDIA_BUCKET, LEGACY_GCS_BUCKET_NAME]
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0);
+  if (allowed.length === 0) return NODE_ENV !== "production";
+  const match = /^gs:\/\/([^/]+)\//.exec(uri);
+  if (!match) return false;
+  return allowed.includes(match[1]);
+}
 
 export const AgentIntentSchema = z.enum([
   "CLICK",
@@ -199,6 +226,7 @@ export const MobileUiNodeSchema = z.object({
 export const GcsUriSchema = z
   .string()
   .regex(/^gs:\/\/[a-z0-9][-a-z0-9_.]*[a-z0-9]\/.*$/, "Invalid GCS URI format")
+  .refine(gcsUriBucketAllowed, "GCS bucket is not in the allowed set")
   .describe("GCS 对象 URI，格式：gs://bucket-name/path/to/object");
 
 export const LiveFrameSchema = z.object({
@@ -253,7 +281,7 @@ export const MobileObservationSchema = z.object({
   som_markers: z.array(SomMarkerSchema).max(60).optional(),
   ui_node_stats: UiNodeStatsSchema.optional(),
   frame_fingerprint: z.string().min(1).optional(),
-  ui_nodes: z.array(MobileUiNodeSchema),
+  ui_nodes: z.array(MobileUiNodeSchema).max(500),
   previous_action_result: z.enum(["SUCCESS", "FAILED", "NOT_EXECUTED"]),
   previous_checkpoint_match: z.boolean(),
 }).superRefine((observation, ctx) => {
@@ -274,14 +302,25 @@ export const MobileHistoryItemSchema = z.object({
   result: z.string(),
 });
 
+// Client-computed search flow state aggregated over the FULL action history
+// (not just the bounded history_tail window). Successful TYPE / SUBMIT_INPUT
+// steps can scroll out of history_tail on long sessions, which would
+// otherwise permanently block FINISH in SEARCH mode; when present, the
+// arbiter ORs these flags with its own history_tail scan.
+export const SearchFlowSchema = z.object({
+  has_typed: z.boolean(),
+  has_submitted: z.boolean(),
+});
+
 export const NextStepRequestSchema = z.object({
   session_id: z.string().min(1),
   turn_index: z.number().int().min(0),
   mode: z.enum(["shadow", "active"]),
-  goal: z.string().min(1),
+  goal: z.string().min(1).max(8_000),
   task_spec: MobileTaskSpecSchema,
   observation: MobileObservationSchema,
   history_tail: z.array(MobileHistoryItemSchema),
+  search_flow: SearchFlowSchema.optional(),
   shadow_control_action: ActionCommandSchema.optional(),
 });
 
@@ -314,9 +353,14 @@ export const NextStepResponseSchema = z.object({
   guard: z.object({
     risk_level: AgentRiskLevelSchema,
     block_reason: z.string().nullable(),
+    // Optional traceability marker for heuristic overrides (e.g. when the
+    // arbiter substitutes a search recovery action for the planner output).
+    notes: z.string().nullable().optional(),
   }),
   live_runtime: z.object({
-    used_live: z.literal(true),
+    // True only when the planner actually called the model for this turn
+    // (false for dedup skips and exhausted-retry fallbacks).
+    used_live: z.boolean(),
     model: z.string().min(1),
     connect_latency_ms: z.number().int().nonnegative(),
     inference_latency_ms: z.number().int().nonnegative(),
@@ -376,6 +420,9 @@ export const TelemetryEventSchema = z.object({
   event_type: z.string().min(1),
   payload: z.record(z.string(), z.any()),
   ts: z.string().datetime({ offset: true }).optional(),
+  // Optional client-generated idempotency key. When present, retried batches
+  // are deduplicated server-side via a unique partial index.
+  client_event_id: z.string().min(1).max(128).optional(),
 }).superRefine((event, ctx) => {
   const forbiddenKey = findForbiddenTelemetryKey(event.payload);
   if (!forbiddenKey) return;

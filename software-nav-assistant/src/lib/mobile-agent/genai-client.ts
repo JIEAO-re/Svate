@@ -9,6 +9,7 @@ import {
   OPENAI_COMPAT_ENABLED,
   assertGenAiEnv,
 } from "@/lib/mobile-agent/env";
+import { createSignedReadUrlForGcsUri } from "@/lib/mobile-agent/cloud-storage";
 
 type GenerateContentParams = {
   model: string;
@@ -16,11 +17,47 @@ type GenerateContentParams = {
   config?: {
     responseMimeType?: string;
     temperature?: number;
+    /** Upper bound on generated tokens; forwarded to the provider verbatim. */
+    maxOutputTokens?: number;
+    /** System prompt; forwarded to the provider verbatim. */
+    systemInstruction?: unknown;
+    /** Function-calling tool declarations; forwarded to the provider verbatim. */
+    tools?: unknown;
   };
+};
+
+/** One part of a model candidate; mirrors the subset of the Gemini Part shape
+ * the agent loop consumes (text and functionCall). */
+type GenerateContentPart = {
+  text?: string;
+  functionCall?: {
+    name?: string;
+    args?: Record<string, unknown>;
+  };
+};
+
+/** One model candidate; mirrors the subset of the Gemini Candidate shape the
+ * agent loop consumes. */
+type GenerateContentCandidate = {
+  content?: {
+    parts?: GenerateContentPart[];
+  };
+  /** Why generation stopped, e.g. "STOP" or "MAX_TOKENS"; passed through from
+   * the SDK so callers can detect a truncated (MAX_TOKENS) candidate. */
+  finishReason?: string;
 };
 
 type GenerateContentResponse = {
   text?: string;
+  /** Raw candidates, exposed so function-calling callers can read functionCall
+   * parts that the flattened `text` getter drops. Present for the Gemini SDK
+   * client; absent for the OpenAI-compatible adapter. */
+  candidates?: GenerateContentCandidate[];
+  /** Adapter metadata; set when input had to be degraded for the provider. */
+  meta?: {
+    /** True when one or more image inputs could not be delivered to the model. */
+    vision_input_missing?: boolean;
+  };
 };
 
 type ModelListResponse = {
@@ -33,6 +70,10 @@ export type GenAIClientLike = {
     list(params?: unknown): Promise<ModelListResponse>;
     generateImages(params: unknown): Promise<unknown>;
     generateVideos(params: unknown): Promise<unknown>;
+  };
+  /** Long-running operation polling; absent for providers without support. */
+  operations?: {
+    getVideosOperation(params: { operation: { name: string } }): Promise<unknown>;
   };
 };
 
@@ -66,9 +107,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function appendOpenAIContentPart(
+type OpenAIConversionState = {
+  visionInputMissing: boolean;
+};
+
+async function appendOpenAIContentPart(
   value: unknown,
   output: Array<OpenAITextPart | OpenAIImagePart>,
+  state: OpenAIConversionState,
 ) {
   if (typeof value === "string") {
     if (value.trim()) output.push({ type: "text", text: value });
@@ -115,21 +161,46 @@ function appendOpenAIContentPart(
       return;
     }
 
-    // For non-http URIs (e.g. gs://), pass as text hint for compatibility gateways.
-    output.push({ type: "text", text: `[file_uri] ${fileUri}` });
+    if (/^gs:\/\//i.test(fileUri)) {
+      // OpenAI-compatible gateways cannot read GCS, so exchange the gs://
+      // reference for a signed HTTPS read URL. Never drop the image silently:
+      // signing failures are logged and surfaced via response metadata.
+      try {
+        const signedUrl = await createSignedReadUrlForGcsUri(fileUri);
+        output.push({
+          type: "image_url",
+          image_url: { url: signedUrl },
+        });
+      } catch (error) {
+        console.warn(
+          `[genai-client] failed to create signed read URL for ${fileUri}; vision input is missing for this request: ${String((error as Error)?.message || error)}`,
+        );
+        state.visionInputMissing = true;
+      }
+      return;
+    }
+
+    // Unknown URI scheme: the image cannot be delivered to the provider.
+    console.warn(
+      `[genai-client] unsupported file URI scheme for OpenAI-compatible provider, vision input is missing: ${fileUri}`,
+    );
+    state.visionInputMissing = true;
   }
 }
 
-function normalizeContentsToOpenAI(contents: unknown): OpenAIMessageContent {
+async function normalizeContentsToOpenAI(
+  contents: unknown,
+  state: OpenAIConversionState,
+): Promise<OpenAIMessageContent> {
   if (typeof contents === "string") return contents;
 
   const normalized: Array<OpenAITextPart | OpenAIImagePart> = [];
   if (Array.isArray(contents)) {
     for (const entry of contents) {
-      appendOpenAIContentPart(entry, normalized);
+      await appendOpenAIContentPart(entry, normalized, state);
     }
   } else {
-    appendOpenAIContentPart(contents, normalized);
+    await appendOpenAIContentPart(contents, normalized, state);
   }
 
   return normalized.length > 0 ? normalized : "";
@@ -166,12 +237,13 @@ async function postOpenAIChatCompletion(
   params: GenerateContentParams,
   includeJsonResponseFormat: boolean,
 ): Promise<GenerateContentResponse> {
+  const conversionState: OpenAIConversionState = { visionInputMissing: false };
   const body: Record<string, unknown> = {
     model: params.model,
     messages: [
       {
         role: "user",
-        content: normalizeContentsToOpenAI(params.contents),
+        content: await normalizeContentsToOpenAI(params.contents, conversionState),
       },
     ],
     temperature: params.config?.temperature ?? 0.1,
@@ -200,6 +272,9 @@ async function postOpenAIChatCompletion(
   const json = await response.json();
   return {
     text: extractTextFromOpenAIResponse(json),
+    ...(conversionState.visionInputMissing
+      ? { meta: { vision_input_missing: true } }
+      : {}),
   };
 }
 

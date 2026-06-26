@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import {
   TelemetryBatchRequestSchema,
 } from "@/lib/schemas/mobile-agent";
-import { saveTelemetryEvents, getStoreSnapshot } from "@/lib/mobile-agent/persistence";
+import { saveTelemetryEvents } from "@/lib/mobile-agent/persistence";
 import { authenticateRequest } from "@/lib/mobile-agent/auth-utils";
+import { rateLimitGuard } from "@/lib/mobile-agent/rate-limit";
 
 export async function POST(req: Request) {
   const authResult = await authenticateRequest(req);
@@ -17,6 +18,16 @@ export async function POST(req: Request) {
       { status: 401 },
     );
   }
+
+  // Cap telemetry ingestion per authenticated device so a single valid token
+  // cannot spam unbounded writes. Use a telemetry-namespaced identity so it has
+  // its own budget and never consumes the model-call budget shared by the
+  // next-step / agent-turn routes. A missing identity fails open (see
+  // enforceRateLimit), matching the other guarded routes.
+  const limited = await rateLimitGuard(
+    authResult.client_id ? `telemetry:${authResult.client_id}` : undefined,
+  );
+  if (limited) return limited;
 
   try {
     const body = await req.json();
@@ -33,10 +44,11 @@ export async function POST(req: Request) {
     }
 
     await saveTelemetryEvents(parsed.data.events);
+    // Do not return a global store snapshot here: it leaks aggregate row counts to
+    // any authenticated device and runs several COUNT(*) queries per telemetry POST.
     return NextResponse.json({
       success: true,
       accepted: parsed.data.events.length,
-      snapshot: await getStoreSnapshot(),
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "unknown_error";

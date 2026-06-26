@@ -2,10 +2,14 @@ import {
   NextStepRequest,
   PlannerOutput,
 } from "@/lib/schemas/mobile-agent";
-import { runLivePlannerTurn } from "@/lib/mobile-agent/live-turn-client";
+import {
+  runLivePlannerTurn,
+  type FrameWindowOptions,
+} from "@/lib/mobile-agent/live-turn-client";
 
 export async function runPlanner(
   request: NextStepRequest,
+  options: FrameWindowOptions = {},
 ): Promise<{
   model: string;
   output: PlannerOutput;
@@ -14,8 +18,9 @@ export async function runPlanner(
   inferenceLatencyMs: number;
   frameCount: number;
   gcsFrameCount: number;
+  usedLive: boolean;
 }> {
-  const live = await runLivePlannerTurn(request);
+  const live = await runLivePlannerTurn(request, options);
   return {
     model: live.model,
     output: live.output,
@@ -24,5 +29,6 @@ export async function runPlanner(
     inferenceLatencyMs: live.inferenceLatencyMs,
     frameCount: live.frameCount,
     gcsFrameCount: live.gcsFrameCount,
+    usedLive: live.usedLive,
   };
 }

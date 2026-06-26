@@ -26,6 +26,13 @@ export const REVIEWER_MODEL = process.env.REVIEWER_MODEL?.trim() || "gemini-2.5-
 export const GUIDE_IMAGE_MODEL = process.env.GUIDE_IMAGE_MODEL?.trim() || "gemini-2.5-flash-image-preview";
 export const GUIDE_VIDEO_MODEL = process.env.GUIDE_VIDEO_MODEL?.trim() || "veo-2.0-generate-001";
 export const POSTGRES_URL = process.env.POSTGRES_URL?.trim() || process.env.DATABASE_URL?.trim() || "";
+export const DATABASE_SSL = process.env.DATABASE_SSL?.trim().toLowerCase() === "true";
+// Optional PEM-encoded CA certificate content used to verify the database server.
+export const DATABASE_SSL_CA = process.env.DATABASE_SSL_CA?.trim() || "";
+// Explicit opt-out of TLS certificate verification. Only for environments where
+// a proper CA chain is impossible; logs a loud warning when enabled.
+export const DATABASE_SSL_INSECURE =
+  process.env.DATABASE_SSL_INSECURE?.trim().toLowerCase() === "true";
 export const GUIDE_MEDIA_BUCKET = process.env.GUIDE_MEDIA_BUCKET?.trim() || "";
 export const LEGACY_GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME?.trim() || "";
 export const SCREENSHOT_UPLOAD_BUCKET =
@@ -40,7 +47,10 @@ export const INTERNAL_DEV_BYPASS =
   process.env.INTERNAL_DEV_BYPASS?.trim().toLowerCase() === "true";
 export const SKIP_AUTH_DEV = process.env.SKIP_AUTH_DEV?.trim().toLowerCase() === "true";
 export const ENABLE_LEGACY_DEMO = process.env.ENABLE_LEGACY_DEMO?.trim().toLowerCase() === "true";
-export const ENABLE_GUIDE_MEDIA = process.env.ENABLE_GUIDE_MEDIA?.trim().toLowerCase() !== "false";
+// Default off: generated guide media currently has no consumer on the client,
+// so keeping it enabled by default only burns image-generation quota. Set
+// ENABLE_GUIDE_MEDIA=true explicitly to turn it on.
+export const ENABLE_GUIDE_MEDIA = process.env.ENABLE_GUIDE_MEDIA?.trim().toLowerCase() === "true";
 export const ENABLE_SESSION_RECAP_VIDEO =
   process.env.ENABLE_SESSION_RECAP_VIDEO?.trim().toLowerCase() === "true";
 
@@ -48,6 +58,31 @@ export const ENABLE_SESSION_RECAP_VIDEO =
 export const FRAME_WINDOW_SIZE = Number(process.env.FRAME_WINDOW_SIZE || 3);
 export const FRAME_DEDUP_ENABLED =
   process.env.FRAME_DEDUP_ENABLED?.trim().toLowerCase() !== "false";
+
+// Per-device rate limiting for the authenticated LLM routes. A single valid
+// device token must not be able to issue unbounded expensive model calls, so
+// each route enforces a sliding/fixed-window request budget keyed by the
+// authenticated identity. The limiter prefers the shared Postgres store so the
+// budget is enforced across Cloud Run instances; it falls back to a best-effort
+// in-memory counter and always fails open if the backend is unavailable.
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+// Requests allowed per window per identity. Set MOBILE_AGENT_RPM_LIMIT<=0 to
+// disable rate limiting entirely.
+export const MOBILE_AGENT_RPM_LIMIT = (() => {
+  const raw = process.env.MOBILE_AGENT_RPM_LIMIT?.trim();
+  if (raw === undefined || raw === "") return 60;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : 60;
+})();
+// Window length in seconds; defaults to a one-minute (RPM) window.
+export const MOBILE_AGENT_RATE_WINDOW_SEC = parsePositiveInt(
+  process.env.MOBILE_AGENT_RATE_WINDOW_SEC,
+  60,
+);
 
 export function assertGenAiEnv() {
   if (OPENAI_COMPAT_ENABLED) {

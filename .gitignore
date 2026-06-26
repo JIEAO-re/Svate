@@ -14,8 +14,9 @@ local.properties
 .env.*
 .env.local
 
-# local tooling and network profiles
-Caddyfile.subscription
-LX专用Tokyo.yaml
-LX专用Tokyo.yaml.bak.*
-sing-box.server.json
+# Kotlin compiler cache
+.kotlin/
+
+# Local debug captures (emulator / phone screenshots) — not part of the project
+/_emu_*.png
+/_phone_*.png

@@ -167,6 +167,29 @@ describe("NextStepRequestSchema contract", () => {
     const result = NextStepRequestSchema.safeParse(payload);
     expect(result.success).toBe(false);
   });
+
+  it("accepts payload with client-computed search_flow", () => {
+    const payload = makeRequest({
+      search_flow: { has_typed: true, has_submitted: false },
+    });
+    const result = NextStepRequestSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts payload without search_flow (older clients)", () => {
+    const payload = makeRequest();
+    expect("search_flow" in payload).toBe(false);
+    const result = NextStepRequestSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects search_flow with non-boolean fields", () => {
+    const payload = makeRequest({
+      search_flow: { has_typed: "yes", has_submitted: true },
+    });
+    const result = NextStepRequestSchema.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
 });
 
 // ===========================================================================
@@ -340,6 +363,23 @@ describe("TelemetryBatchRequestSchema contract", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts events carrying client_event_id (Android idempotency key)", () => {
+    const batch = {
+      events: [
+        {
+          trace_id: "tr_001",
+          session_id: "sess_001",
+          turn_index: 0,
+          event_type: "action_executed",
+          payload: { duration_ms: 120 },
+          client_event_id: "550e8400-e29b-41d4-a716-446655440000",
+        },
+      ],
+    };
+    const result = TelemetryBatchRequestSchema.safeParse(batch);
+    expect(result.success).toBe(true);
+  });
+
   it("rejects telemetry payload containing screenshot_base64 (forbidden key)", () => {
     const batch = {
       events: [
@@ -433,6 +473,11 @@ describe("Android CloudDecisionClient field alignment", () => {
           result: "app launched successfully",
         },
       ],
+      // Client-computed over the full StepRecord history, not just the tail.
+      search_flow: {
+        has_typed: false,
+        has_submitted: false,
+      },
     };
 
     const result = NextStepRequestSchema.safeParse(androidPayload);

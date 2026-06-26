@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { NextStepRequestSchema } from "@/lib/schemas/mobile-agent";
 import { runMobileAgentPipeline } from "@/lib/mobile-agent/pipeline";
 import { authenticateRequest } from "@/lib/mobile-agent/auth-utils";
+import { rateLimitGuard } from "@/lib/mobile-agent/rate-limit";
 
-export const maxDuration = 30;
+// Allow headroom for planner + reviewer + one REPLAN retry within the
+// pipeline's internal time budget.
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   // ========== P0 authentication guard ==========
@@ -18,6 +21,10 @@ export async function POST(req: Request) {
       { status: 401 },
     );
   }
+
+  // Per-device rate limit: cap expensive model calls per authenticated identity.
+  const limited = await rateLimitGuard(authResult.client_id);
+  if (limited) return limited;
 
   try {
     const body = await req.json();

@@ -6,4 +6,33 @@
     <string name="action_done">完成</string>
     <string name="action_confirm">确认</string>
     <string name="action_confirm_clear">确认清除</string>
+    <string name="settings_profile_extraction">允许 AI 记住我的偏好（会上传对话用于提取）</string>
+
+    <!-- Autonomous agent loop mode (experimental, coexists with the fixed pipeline) -->
+    <string name="mode_agent_loop">自主 Agent（实验）</string>
+    <string name="mode_agent_loop_hint">由模型在手机上自主决定每一步操作，每个动作都会经过权限闸门。</string>
+    <string name="agent_loop_start">开始自主执行</string>
+
+    <!-- Permission mode toggle on the top bar (cycles 询问 → 放行 → 实验) -->
+    <string name="permission_mode_ask_desc">权限模式：询问。每个写操作执行前都会先征求你的同意。点击切换到放行。</string>
+    <string name="permission_mode_auto_desc">权限模式：放行。写操作会自动执行，高危动作仍会询问。点击切换到实验。</string>
+    <string name="permission_mode_experimental_desc">权限模式：实验。所有操作（含高危）一律自动执行，绝不征求同意。点击切换回询问。</string>
+
+    <!-- Shown once the first time the user switches to AUTO (放行) mode -->
+    <string name="permission_auto_notice_title">已切换到放行模式</string>
+    <string name="permission_auto_notice_body">放行模式下，常规写操作会自动执行，不再逐个询问。涉及支付、转账、删除、系统授权等高危动作仍会停下来征求你的确认。</string>
+
+    <!-- Shown once the first time the user switches to EXPERIMENTAL (实验) mode -->
+    <string name="permission_experimental_notice_title">已切换到实验模式（无任何确认）</string>
+    <string name="permission_experimental_notice_body">实验模式下，Svate 会自动执行一切操作——包括支付、转账、删除、卸载、修改系统设置、发送消息等高危动作，全程不再向你确认。请仅在你完全清楚后果、并全程盯着屏幕时使用。再次点击顶栏图标可切回询问模式。</string>
+
+    <!-- Permission request prompt surfaced when a tool needs confirmation -->
+    <string name="permission_request_title">需要你的确认</string>
+    <string name="permission_grant_once">仅此一次</string>
+    <string name="permission_grant_always">总是允许</string>
+    <string name="permission_deny">拒绝</string>
+    <string name="permission_risk_safe">风险：安全</string>
+    <string name="permission_risk_low">风险：较低</string>
+    <string name="permission_risk_normal">风险：一般</string>
+    <string name="permission_risk_high">风险：高危</string>
 </resources>

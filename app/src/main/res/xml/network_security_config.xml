@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Block cleartext (HTTP) traffic by default.
+    The only exception is 10.0.2.2, the Android emulator host loopback,
+    which is used as the local development backend (see MOBILE_AGENT_BASE_URL default).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

@@ -57,11 +57,6 @@ android {
         )
         buildConfigField(
             "boolean",
-            "MOBILE_AGENT_ENABLED",
-            localBooleanLiteral("MOBILE_AGENT_ENABLED", true)
-        )
-        buildConfigField(
-            "boolean",
             "MOBILE_AGENT_TELEMETRY_ENABLED",
             localBooleanLiteral("MOBILE_AGENT_TELEMETRY_ENABLED", true)
         )
@@ -69,42 +64,6 @@ android {
             "int",
             "MOBILE_AGENT_TIMEOUT_MS",
             localIntLiteral("MOBILE_AGENT_TIMEOUT_MS", 12000)
-        )
-        buildConfigField(
-            "boolean",
-            "EVENT_DRIVEN",
-            localBooleanLiteral("EVENT_DRIVEN", true)
-        )
-        buildConfigField(
-            "boolean",
-            "SOM_CLOUD",
-            localBooleanLiteral("SOM_CLOUD", true)
-        )
-        buildConfigField(
-            "boolean",
-            "OPEN_INTENT",
-            localBooleanLiteral("OPEN_INTENT", true)
-        )
-        buildConfigField(
-            "boolean",
-            "UI_PRUNE",
-            localBooleanLiteral("UI_PRUNE", true)
-        )
-        buildConfigField(
-            "boolean",
-            "VISUAL_DIFF",
-            localBooleanLiteral("VISUAL_DIFF", true)
-        )
-        buildConfigField("int", "MAX_RETRY_ATTEMPTS", localIntLiteral("MAX_RETRY_ATTEMPTS", 3))
-        buildConfigField(
-            "boolean",
-            "NEXT_PUBLIC_SHOW_DEV_PANEL",
-            localBooleanLiteral("NEXT_PUBLIC_SHOW_DEV_PANEL", true)
-        )
-        buildConfigField(
-            "boolean",
-            "NEXT_PUBLIC_MOCK_MODE",
-            localBooleanLiteral("NEXT_PUBLIC_MOCK_MODE", false)
         )
         // Compatibility flag: whether to send the redundant screenshot_base64 field.
         // Disabled by default; enable only for debugging or server-side fallback compatibility.
@@ -125,7 +84,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Shrink, optimize, and obfuscate release builds; debug stays unminified.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -142,6 +103,8 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // Shizuku UserService IPC is defined via AIDL (IShizukuUserService.aidl).
+        aidl = true
     }
 }
 
@@ -155,10 +118,20 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // EncryptedSharedPreferences (Keystore-backed) for the on-device model API key.
+    implementation(libs.androidx.security.crypto)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+    // Shizuku: ADB/root-privileged operations via a bound UserService (true device-admin power).
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
     testImplementation(libs.junit)
+    // android.jar stubs org.json to throw "not mocked" in local JVM unit tests;
+    // the real reference implementation lets schema/JSON tests run on the JVM.
+    testImplementation(libs.json)
+    // runTest + virtual time for the suspend gesture bridge in ToolSupport.
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

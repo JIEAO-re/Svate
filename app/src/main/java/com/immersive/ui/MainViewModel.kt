@@ -13,7 +13,12 @@ import com.immersive.ui.agent.DecisionOption
 import com.immersive.ui.agent.DecisionRequest
 import com.immersive.ui.agent.TaskSpec
 import com.immersive.ui.agent.UserProfileStore
-import com.immersive.ui.agent.flow.OpenClawOrchestrator
+import com.immersive.ui.agent.loop.AgentLoop
+import com.immersive.ui.agent.loop.AgentLoopEvent
+import com.immersive.ui.agent.loop.LoopTurn
+import com.immersive.ui.agent.loop.PermissionDecision
+import com.immersive.ui.agent.loop.PermissionMode
+import com.immersive.ui.agent.loop.tools.ToolSupport
 import com.immersive.ui.data.AppDatabase
 import com.immersive.ui.data.MessageEntity
 import com.immersive.ui.data.SessionEntity
@@ -63,8 +68,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingDecisionRequest = MutableStateFlow<DecisionRequest?>(null)
     val pendingDecisionRequest: StateFlow<DecisionRequest?> = _pendingDecisionRequest.asStateFlow()
 
-    // Agent orchestrator held by the ViewModel to survive configuration changes
-    private var agentOrchestrator: OpenClawOrchestrator? = null
     var pendingConfirmCallback: ((Boolean) -> Unit)? = null
         private set
     var pendingDecisionCallback: ((DecisionOption?) -> Unit)? = null
@@ -77,8 +80,254 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _narrationEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val narrationEvents = _narrationEvents.asSharedFlow()
 
-    private var lastPhaseMessageLogged: String? = null
-    private var lastPhaseMessageTs: Long = 0L
+    // True while the loop is waiting for screen-recording (MediaProjection) consent.
+    // Modeled as durable StateFlow state (not a one-shot event) so a recreated Activity
+    // re-reads the pending flag and can still drive the consent dialog, instead of the
+    // request being silently dropped during the recreation gap.
+    private val _screenAccessPending = MutableStateFlow(false)
+    val screenAccessPending: StateFlow<Boolean> = _screenAccessPending.asStateFlow()
+
+    // ================================================================
+    // Autonomous agent loop (claude-code-style). The ViewModel only talks
+    // to the frozen AgentLoop public API and never its internals.
+    // ================================================================
+
+    /**
+     * A pending permission request surfaced by the agent loop, mapped from the
+     * AwaitingPermission event into a UI-friendly model the Activity renders.
+     */
+    data class PermissionPrompt(
+        val toolCallId: String,
+        val toolName: String,
+        val description: String,
+        val riskClass: String,
+    )
+
+    // Single AgentLoop instance owned by the ViewModel so it survives configuration
+    // changes; built lazily with the application context and viewModelScope.
+    private val agentLoop: AgentLoop by lazy {
+        AgentLoop(getApplication<Application>().applicationContext, viewModelScope).also { loop ->
+            loop.mode = _permissionMode.value
+            // Drain loop events into UI state on the main scope.
+            viewModelScope.launch {
+                loop.events.collect { event -> onAgentLoopEvent(event) }
+            }
+        }
+    }
+
+    private val _agentLoopRunning = MutableStateFlow(false)
+    val agentLoopRunning: StateFlow<Boolean> = _agentLoopRunning.asStateFlow()
+
+    private val _agentLoopPhase = MutableStateFlow("")
+    val agentLoopPhase: StateFlow<String> = _agentLoopPhase.asStateFlow()
+
+    // Rolling list of narration / tool-progress lines for the chat surface.
+    private val _agentLoopNarration = MutableStateFlow<List<String>>(emptyList())
+    val agentLoopNarration: StateFlow<List<String>> = _agentLoopNarration.asStateFlow()
+
+    // Tool steps executed in the current run (one finished-tool line each). Snapshotted into
+    // [lastRunCommands] when the run ends, so the chat can attach a collapsible
+    // "已运行 N 条命令" card to that assistant turn. Read by the Activity right after an
+    // agentMessages emission (set synchronously before the emit, on the same main scope).
+    private val runToolSteps = mutableListOf<String>()
+
+    @Volatile
+    var lastRunCommands: List<String> = emptyList()
+        private set
+
+    private val _pendingPermission = MutableStateFlow<PermissionPrompt?>(null)
+    val pendingPermission: StateFlow<PermissionPrompt?> = _pendingPermission.asStateFlow()
+
+    // Permission mode is persisted in SharedPreferences and mirrored into the loop.
+    private val _permissionMode = MutableStateFlow(loadPermissionMode())
+    val permissionMode: StateFlow<PermissionMode> = _permissionMode.asStateFlow()
+
+    private fun loadPermissionMode(): PermissionMode {
+        val raw = ctx.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_PERMISSION_MODE, PermissionMode.SAFE.name)
+        return runCatching { PermissionMode.valueOf(raw ?: PermissionMode.SAFE.name) }
+            .getOrDefault(PermissionMode.SAFE)
+    }
+
+    private fun appendNarration(line: String) {
+        // Keep a bounded tail so the list never grows without limit.
+        val next = (_agentLoopNarration.value + line).takeLast(200)
+        _agentLoopNarration.value = next
+    }
+
+    private fun onAgentLoopEvent(event: AgentLoopEvent) {
+        when (event) {
+            is AgentLoopEvent.Narration -> {
+                appendNarration(event.text)
+                viewModelScope.launch { _narrationEvents.emit(event.text) }
+            }
+            is AgentLoopEvent.PhaseChanged -> {
+                _agentLoopPhase.value = event.phase
+                // The loop only reaches "acting" once it actually runs device tools,
+                // so start the floating stop button then — not for a pure chat reply,
+                // which would make the overlay flash for a sub-second run.
+                if (event.phase == "acting") {
+                    try { AgentStopOverlayService.start(ctx.applicationContext) } catch (_: Exception) {}
+                }
+            }
+            AgentLoopEvent.RequestScreenAccess -> {
+                _screenAccessPending.value = true
+            }
+            is AgentLoopEvent.ToolStarted -> {
+                appendNarration("▶ ${event.toolName}: ${event.summary}")
+            }
+            is AgentLoopEvent.ToolFinished -> {
+                val mark = if (event.ok) "✅" else "❌"
+                appendNarration("$mark ${event.toolName}: ${event.summary}")
+                // Record one line per finished tool for the post-run "已运行 N 条命令" card.
+                // Skip the terminal finish tool so the count reflects real device commands.
+                if (event.toolName != "finish") {
+                    // Redact secrets so a tool summary (e.g. a typed string) can never
+                    // re-inject an API key into the card or the next turn's history.
+                    runToolSteps.add(ToolSupport.redactSecrets("$mark ${event.toolName}: ${event.summary}"))
+                }
+            }
+            is AgentLoopEvent.AwaitingPermission -> {
+                _pendingPermission.value = PermissionPrompt(
+                    toolCallId = event.toolCallId,
+                    toolName = event.toolName,
+                    description = event.description,
+                    riskClass = event.riskClass,
+                )
+            }
+            is AgentLoopEvent.Finished -> {
+                _agentLoopRunning.value = false
+                _pendingPermission.value = null
+                _agentLoopPhase.value = ""
+                stopLoopSideServices()
+                if (event.conversational) {
+                    // A plain chat reply (an answer, or a clarifying question handed
+                    // back to the user): show it as a normal assistant message with
+                    // no task-status decoration and no command card.
+                    lastRunCommands = emptyList()
+                    appendNarration(event.summary)
+                    viewModelScope.launch {
+                        _agentMessages.emit(event.summary)
+                        _narrationEvents.emit(event.summary)
+                    }
+                } else {
+                    // A task that touched the device: attach the executed-command list.
+                    lastRunCommands = runToolSteps.toList()
+                    val mark = if (event.success) "✅" else "⚠️"
+                    appendNarration("$mark ${event.summary}")
+                    viewModelScope.launch {
+                        _agentMessages.emit("$mark ${event.summary}")
+                        _narrationEvents.emit(event.summary)
+                    }
+                }
+            }
+            is AgentLoopEvent.Failed -> {
+                _agentLoopRunning.value = false
+                _pendingPermission.value = null
+                _agentLoopPhase.value = ""
+                stopLoopSideServices()
+                lastRunCommands = runToolSteps.toList()
+                appendNarration("❌ ${event.reason}")
+                viewModelScope.launch {
+                    _agentMessages.emit("❌ ${event.reason}")
+                    _narrationEvents.emit(event.reason)
+                }
+            }
+        }
+    }
+
+    /**
+     * Start an autonomous agent run for the latest user message [goal], seeding prior
+     * chat [history] for context. The loop decides whether to just reply or to operate
+     * the phone; it acquires screen recording lazily (only when it needs to see the
+     * screen), so a pure chat reply never triggers any system permission prompt.
+     */
+    fun startAgentLoop(
+        goal: String,
+        history: List<LoopTurn> = emptyList(),
+        attachmentImages: List<String> = emptyList(),
+        attachmentText: String = "",
+    ) {
+        val trimmed = goal.trim()
+        // Allow an attachments-only message (e.g. "look at this photo" with no text).
+        val hasAttachments = attachmentImages.isNotEmpty() || attachmentText.isNotBlank()
+        if ((trimmed.isBlank() && !hasAttachments) || _agentLoopRunning.value) return
+        _agentLoopNarration.value = emptyList()
+        runToolSteps.clear()
+        lastRunCommands = emptyList()
+        _pendingPermission.value = null
+        _agentLoopPhase.value = ""
+        _screenAccessPending.value = false
+        _agentLoopRunning.value = true
+        agentLoop.mode = _permissionMode.value
+        try {
+            agentLoop.start(trimmed.ifBlank { "（见附件）" }, history, attachmentImages, attachmentText)
+        } catch (e: Exception) {
+            _agentLoopRunning.value = false
+            stopLoopSideServices()
+            emitError("启动失败：${e.localizedMessage ?: "unknown_error"}")
+        }
+    }
+
+    /** Relay the Activity's screen-recording consent result back to the running loop. */
+    fun resolveScreenAccess(granted: Boolean) {
+        _screenAccessPending.value = false
+        try { agentLoop.resolveScreenAccess(granted) } catch (_: Exception) {}
+    }
+
+    fun stopAgentLoop() {
+        try { agentLoop.stop() } catch (_: Exception) {}
+        // Snapshot whatever ran so a user-stopped task still records its command process
+        // (the chat's "⏹️ 已停止" message attaches these).
+        lastRunCommands = runToolSteps.toList()
+        _agentLoopRunning.value = false
+        _pendingPermission.value = null
+        _agentLoopPhase.value = ""
+        stopLoopSideServices()
+    }
+
+    /**
+     * Stop the services that accompany a loop run (screen capture, floating stop
+     * button). Idempotent; safe to call from any loop-teardown path. Without this,
+     * a loop that finishes on its own leaves the projection and overlay running.
+     */
+    private fun stopLoopSideServices() {
+        val appCtx = ctx.applicationContext
+        try { AgentCaptureService.stop(appCtx) } catch (_: Exception) {}
+        try { AgentStopOverlayService.stop(appCtx) } catch (_: Exception) {}
+    }
+
+    /** Forward the user's choice on a pending permission prompt back to the loop. */
+    fun onPermissionResolved(toolCallId: String, decision: PermissionDecision) {
+        _pendingPermission.value = null
+        try { agentLoop.resolvePermission(toolCallId, decision) } catch (_: Exception) {}
+    }
+
+    /** Set the permission mode directly, mirror it into the live AgentLoop, and persist it. */
+    fun setPermissionMode(mode: PermissionMode) {
+        _permissionMode.value = mode
+        agentLoop.mode = mode
+        ctx.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PERMISSION_MODE, mode.name)
+            .apply()
+    }
+
+    /**
+     * Cycle the permission mode 安全 → 询问 → 实验 → 安全 and return the new mode so the UI
+     * can react (e.g. show the experimental notice once). Kept for back-compat; the new
+     * UI uses [setPermissionMode] directly via the mode picker.
+     */
+    fun togglePermissionMode(): PermissionMode {
+        val next = when (_permissionMode.value) {
+            PermissionMode.SAFE -> PermissionMode.AUTO
+            PermissionMode.AUTO -> PermissionMode.EXPERIMENTAL
+            PermissionMode.EXPERIMENTAL -> PermissionMode.SAFE
+            PermissionMode.ASK -> PermissionMode.AUTO
+        }
+        setPermissionMode(next)
+        return next
+    }
 
     fun setGuideRunning(running: Boolean) {
         _isGuideRunning.value = running
@@ -88,100 +337,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _statusText.value = text
     }
 
-    /**
-     * Start autonomous agent mode inside viewModelScope so it survives configuration changes.
-     * Uses applicationContext to avoid leaking the Activity.
-     */
-    fun startAgent(plan: GoalChatResult) {
-        val appCtx = ctx.applicationContext
-
-        // Clear any previous instance
-        try { agentOrchestrator?.stop() } catch (_: Exception) {}
-        agentOrchestrator = null
-        try { GuideCaptureService.stop(appCtx) } catch (_: Exception) {}
-        try { OverlayGuideService.hideOverlay(appCtx) } catch (_: Exception) {}
-        try { AgentStopOverlayService.stop(appCtx) } catch (_: Exception) {}
-
-        val orchestrator = OpenClawOrchestrator(appCtx)
-        agentOrchestrator = orchestrator
-
-        orchestrator.onPhaseChanged = { phase, message ->
-            _agentPhaseText.value = message
-            _statusText.value = "Autonomous mode: $message"
-            if (phase != AgentPhase.WAITING_USER_DECISION) {
-                _pendingDecisionRequest.value = null
-                pendingDecisionCallback = null
-            }
-            val now = System.currentTimeMillis()
-            val shouldAppend = lastPhaseMessageLogged != message || now - lastPhaseMessageTs > 1500L
-            if (shouldAppend) {
-                viewModelScope.launch { _agentMessages.emit("🤖 $message") }
-                lastPhaseMessageLogged = message
-                lastPhaseMessageTs = now
-            }
-        }
-
-        orchestrator.onNarration = { text ->
-            viewModelScope.launch { _narrationEvents.emit(text) }
-        }
-
-        orchestrator.onRequestConfirm = { action, callback ->
-            _agentPhaseText.value = "⚠️ High-risk action requires confirmation: ${action.targetDesc}"
-            viewModelScope.launch {
-                _agentMessages.emit("⚠️ Confirmation required: ${action.elderlyNarration}")
-            }
-            pendingConfirmCallback = callback
-        }
-
-        orchestrator.onRequestDecision = { request, callback ->
-            _pendingDecisionRequest.value = request
-            pendingDecisionCallback = callback
-            _agentPhaseText.value = "请确认：${request.question}"
-            viewModelScope.launch { _agentMessages.emit("请确认：${request.question}") }
-        }
-
-        orchestrator.onReportReady = { report ->
-            viewModelScope.launch {
-                _agentMessages.emit(report)
-                _narrationEvents.emit("Report is ready and posted in chat.")
-            }
-        }
-
-        orchestrator.onCompleted = { message ->
-            _isGuideRunning.value = false
-            _statusText.value = "✅ Task completed"
-            viewModelScope.launch { _agentMessages.emit("✅ $message") }
-            viewModelScope.launch { _narrationEvents.emit(message) }
-            cleanupAgent(appCtx)
-        }
-
-        orchestrator.onFailed = { message ->
-            _isGuideRunning.value = false
-            _statusText.value = "❌ Task failed"
-            viewModelScope.launch { _agentMessages.emit("❌ $message") }
-            viewModelScope.launch { _narrationEvents.emit(message) }
-            cleanupAgent(appCtx)
-        }
-
-        orchestrator.start(
-            goal = plan.inferredGoal,
-            targetAppName = plan.targetAppName,
-            taskSpec = TaskSpec.fromRaw(
-                taskMode = plan.taskMode,
-                searchQuery = plan.searchQuery,
-                researchDepth = plan.researchDepth,
-                homeworkPolicy = plan.homeworkPolicy,
-                askOnUncertain = plan.askOnUncertain,
-            ),
-        )
-        try { AgentStopOverlayService.start(appCtx) } catch (_: Exception) {}
-    }
-
     fun stopGuide() {
         val appCtx = ctx.applicationContext
         try {
-            agentOrchestrator?.stop()
-            agentOrchestrator = null
             GuideCaptureService.stop(appCtx)
             AgentCaptureService.stop(appCtx)
             OverlayGuideService.hideOverlay(appCtx)
@@ -191,7 +349,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pendingConfirmCallback = null
             _pendingDecisionRequest.value = null
             pendingDecisionCallback = null
-            _statusText.value = "Guide stopped"
+            // Leave the status neutral. The old "Guide stopped" string leaked from the
+            // retired pipeline into the always-on agent's stop and confused users.
+            _statusText.value = ""
         } catch (_: Exception) {}
     }
 
@@ -212,18 +372,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingDecisionCallback = null
     }
 
-    private fun cleanupAgent(appCtx: Context) {
-        agentOrchestrator = null
-        pendingConfirmCallback = null
-        _pendingDecisionRequest.value = null
-        pendingDecisionCallback = null
-        try { AgentCaptureService.stop(appCtx) } catch (_: Exception) {}
-    }
-
     override fun onCleared() {
         super.onCleared()
-        try { agentOrchestrator?.stop() } catch (_: Exception) {}
-        agentOrchestrator = null
+        try { stopAgentLoop() } catch (_: Exception) {}
     }
 
     // Room persistence helpers
@@ -314,5 +465,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 emitError("清除数据失败：${e.localizedMessage}")
             }
         }
+    }
+
+    companion object {
+        // Shared with MainActivity's settings store ("svate_settings").
+        private const val SETTINGS_PREFS = "svate_settings"
+        private const val KEY_PERMISSION_MODE = "agent_permission_mode"
     }
 }

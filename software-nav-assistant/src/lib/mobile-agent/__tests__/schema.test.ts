@@ -227,6 +227,33 @@ describe("NextStepResponseSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts used_live=false when no live model call happened", () => {
+    const result = NextStepResponseSchema.safeParse(
+      makeValidResponse({
+        live_runtime: {
+          used_live: false,
+          model: "gemini-live-2.5-flash-preview",
+          connect_latency_ms: 0,
+          inference_latency_ms: 0,
+        },
+      }),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts guard notes for heuristic substitutions", () => {
+    const result = NextStepResponseSchema.safeParse(
+      makeValidResponse({
+        guard: {
+          risk_level: "SAFE",
+          block_reason: null,
+          notes: "search_recovery_heuristic",
+        },
+      }),
+    );
+    expect(result.success).toBe(true);
+  });
+
   it("rejects negative latency_ms in planner", () => {
     const resp = makeValidResponse();
     (resp.planner as Record<string, unknown>).latency_ms = -1;

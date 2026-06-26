@@ -1,6 +1,7 @@
 package com.immersive.ui.guide
 
 import com.immersive.ui.BuildConfig
+import com.immersive.ui.agent.loop.EndpointConfig
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -42,21 +43,48 @@ data class ScreenAnalysisResult(
 
 object GuideAiEngines {
     private const val UNKNOWN_APP = "Target App"
+
+    // Mirrors the BFF chat-goal contract: at most 40 messages, each <= 1000 chars.
+    private const val MAX_BFF_MESSAGES = 40
+    private const val MAX_BFF_CONTENT_CHARS = 1000
+
     private var installedApps: List<AppInfo> = emptyList()
 
     fun setInstalledApps(apps: List<AppInfo>) {
         installedApps = apps
     }
 
-    fun chatForGoal(messages: List<SimpleChatMessage>): GoalChatResult {
+    // When set to a configured endpoint, goal understanding and screen analysis
+    // talk to the user's OpenAI-compatible endpoint directly instead of the
+    // project backend / Gemini. Null restores the backend behavior.
+    @Volatile
+    private var endpoint: EndpointConfig? = null
+
+    fun setModelEndpoint(config: EndpointConfig?) {
+        endpoint = config?.takeIf { it.isConfigured() }
+    }
+
+    /**
+     * Clarifies the user goal via the BFF, falling back to a generic model prompt.
+     *
+     * @param userProfile Optional formatted user profile (see UserProfileStore.formatForPrompt).
+     *   Callers must only pass it when the profile opt-in toggle is enabled; null keeps the
+     *   request identical to the no-profile behavior.
+     */
+    fun chatForGoal(messages: List<SimpleChatMessage>, userProfile: String? = null): GoalChatResult {
         val fallback = fallbackChat(messages)
-        try {
-            val viaBff = requestChatGoalViaBff(messages)
-            if (viaBff.reply.isNotBlank()) {
-                return viaBff
+        // With a user-configured endpoint, skip the project backend (and its Gemini
+        // default) entirely; the generic-prompt path below routes to the endpoint
+        // via requestGeminiJson.
+        if (endpoint == null) {
+            try {
+                val viaBff = requestChatGoalViaBff(messages, userProfile)
+                if (viaBff.reply.isNotBlank()) {
+                    return viaBff
+                }
+            } catch (_: Exception) {
+                // Fall through to generic model prompt fallback.
             }
-        } catch (_: Exception) {
-            // Fall through to generic model prompt fallback.
         }
 
         val latestUser = messages.lastOrNull { it.role == "user" }?.content.orEmpty()
@@ -68,6 +96,11 @@ object GuideAiEngines {
             }
         val appListText = if (installedApps.isNotEmpty()) {
             "\nInstalled apps:\n${InstalledAppScanner.formatForPrompt(installedApps)}\n"
+        } else {
+            ""
+        }
+        val profileText = if (!userProfile.isNullOrBlank()) {
+            "\nKnown user profile (use it to personalize replies and app suggestions; explicit user requests always take precedence):\n$userProfile\n"
         } else {
             ""
         }
@@ -100,7 +133,7 @@ Rules:
    - RESEARCH: asks for synthesis/multi-source summary/article
    - HOMEWORK: homework/exercise/question solving task
 5) Default research_depth=3, homework_policy=REFERENCE_ONLY, ask_on_uncertain=true.
-$appListText
+$appListText$profileText
 Conversation:
 $conversation
         """.trimIndent()
@@ -409,7 +442,40 @@ Rules:
         return normalized.take(3)
     }
 
-    private fun requestChatGoalViaBff(messages: List<SimpleChatMessage>): GoalChatResult {
+    /**
+     * Builds the message window sent to the BFF, optionally injecting the user profile.
+     *
+     * The BFF chat-goal schema only accepts "user"/"assistant" roles, summarizes the last
+     * 16 messages, and infers the goal from the most recent user message. Inserting the
+     * profile as a user-role context message right before the latest user message keeps it
+     * inside the server's summarization window while guaranteeing it can never be mistaken
+     * for the goal itself.
+     */
+    private fun buildBffMessages(
+        messages: List<SimpleChatMessage>,
+        userProfile: String?,
+    ): List<SimpleChatMessage> {
+        if (userProfile.isNullOrBlank()) return messages.takeLast(MAX_BFF_MESSAGES)
+
+        // Reserve one slot so the total stays within the BFF message limit.
+        val window = messages.takeLast(MAX_BFF_MESSAGES - 1)
+        val lastUserIndex = window.indexOfLast { it.role == "user" }
+        if (lastUserIndex < 0) return window
+
+        val profileMessage = SimpleChatMessage(
+            role = "user",
+            content = (
+                "[User profile context] Known facts about me, use them to personalize " +
+                    "suggestions; my explicit requests always take precedence:\n$userProfile"
+                ).take(MAX_BFF_CONTENT_CHARS),
+        )
+        return window.toMutableList().apply { add(lastUserIndex, profileMessage) }
+    }
+
+    private fun requestChatGoalViaBff(
+        messages: List<SimpleChatMessage>,
+        userProfile: String? = null,
+    ): GoalChatResult {
         val baseUrl = BuildConfig.MOBILE_AGENT_BASE_URL.trimEnd('/')
         val url = URL("$baseUrl/api/chat-goal")
         val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -425,7 +491,7 @@ Rules:
             put(
                 "messages",
                 JSONArray().apply {
-                    messages.takeLast(40).forEach { msg ->
+                    buildBffMessages(messages, userProfile).forEach { msg ->
                         put(
                             JSONObject().apply {
                                 put("role", msg.role)
@@ -443,7 +509,9 @@ Rules:
 
         val code = connection.responseCode
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val body = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+        // errorStream is null when the connection failed before producing a body;
+        // read defensively so an error response never NPEs.
+        val body = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
         if (code !in 200..299) {
             throw IllegalStateException("chat-goal failed: HTTP $code | $body")
         }
@@ -477,11 +545,73 @@ Rules:
         )
     }
 
+    /**
+     * Goal understanding / screen analysis via the user-configured endpoint: send
+     * the JSON-instruction prompt (plus an optional inline image) as a single user
+     * message to {base_url}/chat/completions and extract the JSON object from the
+     * reply. No backend, no Gemini.
+     */
+    private fun requestJsonViaEndpoint(ep: EndpointConfig, prompt: String, imageBase64: String?): JSONObject {
+        val url = URL("${ep.normalizedBaseUrl()}/chat/completions")
+        val content: Any = if (imageBase64.isNullOrBlank()) {
+            prompt
+        } else {
+            JSONArray()
+                .put(JSONObject().put("type", "text").put("text", prompt))
+                .put(
+                    JSONObject().put("type", "image_url").put(
+                        "image_url", JSONObject().put("url", "data:image/jpeg;base64,$imageBase64"),
+                    ),
+                )
+        }
+        val payload = JSONObject()
+            .put("model", ep.model)
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
+            .put("temperature", 0.2)
+
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20_000
+            readTimeout = 30_000
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (ep.apiKey.isNotBlank()) setRequestProperty("Authorization", "Bearer ${ep.apiKey}")
+        }
+        val body = try {
+            OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { it.write(payload.toString()) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
+            if (code !in 200..299) {
+                throw IllegalStateException("endpoint chat/completions failed: HTTP $code | ${text.take(300)}")
+            }
+            text
+        } finally {
+            connection.disconnect()
+        }
+        val replyText = JSONObject(body).optJSONArray("choices")?.optJSONObject(0)
+            ?.optJSONObject("message")?.optString("content").orEmpty()
+        return extractJsonObject(replyText)
+    }
+
+    /** Extract the first JSON object from a model reply that may include prose/fences. */
+    private fun extractJsonObject(text: String): JSONObject {
+        val start = text.indexOf('{')
+        val end = text.lastIndexOf('}')
+        if (start in 0 until end) {
+            runCatching { return JSONObject(text.substring(start, end + 1)) }
+        }
+        return JSONObject(text) // throws if not JSON; the caller's try/catch falls back to local
+    }
+
     private fun requestGeminiJson(prompt: String, imageBase64: String?): JSONObject {
         return requestGeminiJsonPublic(prompt, imageBase64)
     }
 
     fun requestGeminiJsonPublic(prompt: String, imageBase64: String?): JSONObject {
+        endpoint?.let { ep ->
+            return requestJsonViaEndpoint(ep, prompt, imageBase64)
+        }
         val baseUrl = BuildConfig.MOBILE_AGENT_BASE_URL.trimEnd('/')
         val url = URL("$baseUrl/api/mobile-agent/internal/gemini-json")
         val connection = (url.openConnection() as HttpURLConnection).apply {
@@ -506,7 +636,9 @@ Rules:
 
         val code = connection.responseCode
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val body = stream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
+        // errorStream is null when the connection failed before producing a body;
+        // read defensively so an error response never NPEs.
+        val body = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
         if (code !in 200..299) {
             throw IllegalStateException("BFF gemini-json failed: HTTP $code | $body")
         }

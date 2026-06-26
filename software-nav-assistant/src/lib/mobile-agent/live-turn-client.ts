@@ -1,6 +1,7 @@
 import { getGenAIClient, resolveModelWithFallback } from "@/lib/mobile-agent/genai-client";
 import { PLANNER_MODEL, FRAME_WINDOW_SIZE, FRAME_DEDUP_ENABLED } from "@/lib/mobile-agent/env";
 import { buildPlannerPrompt } from "@/lib/mobile-agent/prompts";
+import { applySomAnnotatedFrame, buildFrameParts } from "@/lib/mobile-agent/frame-content";
 import { createHash } from "crypto";
 import {
   NextStepRequest,
@@ -13,9 +14,33 @@ const MAX_RETRIES = Number(process.env.LIVE_TURN_MAX_RETRIES || 3);
 const RETRY_BASE_DELAY_MS = Number(process.env.LIVE_TURN_RETRY_BASE_DELAY_MS || 500);
 
 // ============================================================================
-// Deduplicate by frame fingerprint so repeated frames do not waste tokens
+// Deduplicate by frame fingerprint so repeated frames do not waste tokens.
+// Bounded LRU: entries beyond MAX_FINGERPRINT_SESSIONS evict the least
+// recently used session so long-running processes do not leak memory.
 // ============================================================================
+const MAX_FINGERPRINT_SESSIONS = 500;
 const lastFrameFingerprintBySession = new Map<string, string>();
+
+function getSessionFingerprint(sessionId: string): string | undefined {
+  const value = lastFrameFingerprintBySession.get(sessionId);
+  if (value !== undefined) {
+    // Refresh recency on read so active sessions stay resident.
+    lastFrameFingerprintBySession.delete(sessionId);
+    lastFrameFingerprintBySession.set(sessionId, value);
+  }
+  return value;
+}
+
+function setSessionFingerprint(sessionId: string, fingerprint: string) {
+  // Delete-then-set keeps Map iteration order equal to recency order.
+  lastFrameFingerprintBySession.delete(sessionId);
+  lastFrameFingerprintBySession.set(sessionId, fingerprint);
+  while (lastFrameFingerprintBySession.size > MAX_FINGERPRINT_SESSIONS) {
+    const oldestKey = lastFrameFingerprintBySession.keys().next().value;
+    if (oldestKey === undefined) break;
+    lastFrameFingerprintBySession.delete(oldestKey);
+  }
+}
 
 function computeFrameFingerprint(hint: string, uiSignature: string): string {
   return createHash("sha256").update(`${uiSignature}|${hint}`).digest("hex");
@@ -41,7 +66,19 @@ interface ResolvedFrame {
   sourceType: "inline" | "gcs";
 }
 
-function getFrameWindow(request: NextStepRequest): ResolvedFrame[] {
+export type FrameWindowOptions = {
+  /**
+   * Skip fingerprint deduplication for this call. Used by REPLAN retries:
+   * the second planner pass observes the same frames, so dedup would
+   * otherwise short-circuit it into a useless WAIT.
+   */
+  bypassDedup?: boolean;
+};
+
+function getFrameWindow(
+  request: NextStepRequest,
+  options: FrameWindowOptions = {},
+): ResolvedFrame[] {
   const frames = request.observation.media_window?.frames ?? [];
   let resolved: ResolvedFrame[] = [];
 
@@ -84,42 +121,18 @@ function getFrameWindow(request: NextStepRequest): ResolvedFrame[] {
   }
 
   // Apply FRAME_DEDUP_ENABLED: skip if latest frame fingerprint matches previous turn
-  if (FRAME_DEDUP_ENABLED && resolved.length > 0) {
+  if (FRAME_DEDUP_ENABLED && !options.bypassDedup && resolved.length > 0) {
     const latest = resolved[resolved.length - 1];
     const hint = latest.gcsUri ?? (latest.imageBase64 ?? "").slice(0, 128);
     const fp = computeFrameFingerprint(hint, latest.uiSignature);
-    const previousFingerprint = lastFrameFingerprintBySession.get(request.session_id);
+    const previousFingerprint = getSessionFingerprint(request.session_id);
     if (fp === previousFingerprint) {
       return [];
     }
-    lastFrameFingerprintBySession.set(request.session_id, fp);
+    setSessionFingerprint(request.session_id, fp);
   }
 
   return resolved;
-}
-
-// ============================================================================
-// Build model content parts: GCS URI -> fileData, inline -> inlineData
-// ============================================================================
-
-function buildFrameParts(frameWindow: ResolvedFrame[]): Part[] {
-  return frameWindow.map((frame): Part => {
-    if (frame.gcsUri) {
-      // Feed the GCS URI directly to the model without downloading or transcoding
-      return {
-        fileData: {
-          fileUri: frame.gcsUri,
-          mimeType: "image/jpeg",
-        },
-      };
-    }
-    return {
-      inlineData: {
-        data: frame.imageBase64 ?? "",
-        mimeType: "image/jpeg",
-      },
-    };
-  });
 }
 
 // ============================================================================
@@ -128,6 +141,7 @@ function buildFrameParts(frameWindow: ResolvedFrame[]): Part[] {
 
 export async function runLivePlannerTurn(
   request: NextStepRequest,
+  options: FrameWindowOptions = {},
 ): Promise<{
   model: string;
   output: PlannerOutput;
@@ -135,8 +149,10 @@ export async function runLivePlannerTurn(
   inferenceLatencyMs: number;
   frameCount: number;
   gcsFrameCount: number;
+  /** True only when the model was actually called for this turn. */
+  usedLive: boolean;
 }> {
-  const frameWindow = getFrameWindow(request);
+  const frameWindow = getFrameWindow(request, options);
 
   // Skip the model call when fingerprint deduplication hits and return WAIT immediately
   if (frameWindow.length === 0) {
@@ -164,6 +180,7 @@ export async function runLivePlannerTurn(
       inferenceLatencyMs: 0,
       frameCount: 0,
       gcsFrameCount: 0,
+      usedLive: false,
     };
   }
 
@@ -174,8 +191,13 @@ export async function runLivePlannerTurn(
     "gemini-2.5-flash",
   ]);
 
-  // Build contents by appending frame parts first and the text prompt last
-  const frameParts = buildFrameParts(frameWindow);
+  // Build contents by appending frame parts first and the text prompt last.
+  // When the observation carries a SoM-annotated screenshot, it replaces the
+  // latest frame for the planner (numbered marker boxes let the model ground
+  // target_som_id visually); the reviewer keeps consuming the raw frame.
+  const frameParts = buildFrameParts(
+    applySomAnnotatedFrame(frameWindow, request.observation.som_annotated_image_base64),
+  );
   const contents: Part[] = [...frameParts, { text: prompt }];
 
   let lastError: unknown;
@@ -198,10 +220,11 @@ export async function runLivePlannerTurn(
       return {
         model: resolvedModel,
         output: parsed,
-        connectLatencyMs: 0, // 无连接开销
+        connectLatencyMs: 0, // No connection overhead in stateless mode
         inferenceLatencyMs: Date.now() - inferenceStarted,
         frameCount: frameWindow.length,
         gcsFrameCount,
+        usedLive: true,
       };
     } catch (error) {
       lastError = error;
@@ -245,5 +268,6 @@ export async function runLivePlannerTurn(
     inferenceLatencyMs: 0,
     frameCount: frameWindow.length,
     gcsFrameCount,
+    usedLive: false,
   };
 }

@@ -22,6 +22,12 @@ function safeDivide(a, b) {
 }
 
 function evaluate() {
+  console.warn(
+    "[eval:offline] SCAFFOLD WARNING: results are read from a hand-written static " +
+      `fixture (${path.relative(root, resultPath)}); they are NOT produced by real ` +
+      "agent runs. The metrics below validate the gate wiring, not model quality.",
+  );
+
   const tasks = readJson(datasetPath);
   const runData = readJson(resultPath);
   const runs = runData.runs || [];

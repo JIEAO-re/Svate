@@ -7,13 +7,13 @@ import { GuidanceCard } from "@/components/elderly-ui/GuidanceCard";
 import { DevPanel } from "@/components/dev-panel/DevPanel";
 import { GoalChatPanel, GoalPlan } from "@/components/chat/GoalChatPanel";
 import { Smartphone, RefreshCw, Play, Square } from "lucide-react";
-import { StatusIndicator, DemoModeWarningBanner } from "@/components/status-indicator/StatusIndicator";
+import { StatusIndicator, BackendStatusBanner } from "@/components/status-indicator/StatusIndicator";
 
 // ==========================================
 // Core view: hooks can only be used when wrapped by the Provider
 // ==========================================
 function MainInterface() {
-  const { submitNewScreen, isLoading, context, resetSession, demoMode } = useTaskContext();
+  const { submitNewScreen, isLoading, context, resetSession } = useTaskContext();
   const [isGuideStarted, setIsGuideStarted] = useState(false);
   const [isAutoCaptureRunning, setIsAutoCaptureRunning] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
@@ -156,18 +156,17 @@ function MainInterface() {
   }, [resetSession, stopAutoCapture]);
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 rounded-[3rem] p-6 lg:p-10 shadow-2xl relative overflow-y-auto border border-slate-200">
+    <div className="flex flex-col h-full bg-white rounded-3xl border border-gray-200 shadow-sm p-6 lg:p-10 relative overflow-y-auto text-gray-900">
 
-      {/* 顶部控制栏 */}
+      {/* Top control bar */}
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2 tracking-tight">
-          <Smartphone className="w-8 h-8 text-blue-600" />
-          亲情导航向导 <span className="bg-blue-100 text-blue-600 text-xs px-2 py-1 rounded-full font-bold ml-2">Beta</span>
-          {demoMode && <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full font-bold ml-1">Demo Mode</span>}
+        <h1 className="text-2xl font-black text-gray-900 flex items-center gap-2 tracking-tight">
+          <Smartphone className="w-7 h-7 text-gray-900" />
+          通用 Agent <span className="bg-gray-100 text-gray-500 text-xs px-2.5 py-1 rounded-full font-bold ml-2">Beta</span>
         </h1>
         <button
           onClick={handleResetAll}
-          className="flex items-center gap-2 px-4 py-2 bg-slate-200 text-slate-600 rounded-full font-bold active:bg-slate-300 hover:bg-slate-300 transition-colors text-sm"
+          className="flex items-center gap-2 px-4 py-2 rounded-full bg-gray-100 text-gray-600 font-bold hover:bg-gray-200 transition-colors text-sm"
         >
           <RefreshCw className="w-4 h-4" />
           重置会话
@@ -177,31 +176,31 @@ function MainInterface() {
       {!isGuideStarted ? (
         <div className="flex-1 w-full max-w-2xl mx-auto flex flex-col">
           <GoalChatPanel onStartGuide={handleStartGuide} />
-          <p className="text-center text-slate-400 text-xs mt-4">
+          <p className="text-center text-gray-400 text-xs mt-4">
             对话确认后会出现“开始引导”模块，点击后进入自动截图导航模式。
           </p>
         </div>
       ) : (
         <>
-          {/* 视觉渲染与长辈交互区 */}
+          {/* Visual rendering and elderly interaction area */}
           <div className="flex-1 w-full max-w-md mx-auto flex flex-col">
             <ScreenRenderer />
             <GuidanceCard />
           </div>
 
-          {/* 底部交互区：启动屏幕共享后，每秒自动截图上传 */}
+          {/* Bottom controls: after screen sharing starts, auto-capture and upload one frame per second */}
           <div className="w-full max-w-md mx-auto mt-8">
-            <div className="text-center text-slate-400 font-bold text-sm mb-3">👇 [演示控制台] 启动后每 1 秒自动上传一帧截图</div>
+            <div className="text-center text-gray-400 font-bold text-sm mb-3">[演示控制台] 启动后每 1 秒自动上传一帧截图</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <button
                 onClick={startAutoCapture}
                 disabled={isAutoCaptureRunning || context.state === "RISK_PAUSED"}
-                className={`w-full py-5 rounded-3xl text-xl font-black flex items-center justify-center gap-3 transition-all duration-300 shadow-lg active:scale-95
+                className={`w-full py-5 rounded-3xl text-xl font-black flex items-center justify-center gap-3 transition-all duration-300 active:scale-95
                   ${isAutoCaptureRunning
-                    ? "bg-blue-300 text-blue-50 cursor-not-allowed"
+                    ? "bg-gray-200 text-gray-400 cursor-not-allowed"
                     : context.state === "RISK_PAUSED"
-                      ? "bg-slate-300 text-slate-500 cursor-not-allowed"
-                      : "bg-blue-600 text-white hover:bg-blue-700 hover:shadow-xl hover:-translate-y-1"}`}
+                      ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                      : "bg-black text-white shadow-sm hover:bg-gray-800 hover:-translate-y-0.5"}`}
               >
                 <Play className="w-7 h-7" />
                 {isAutoCaptureRunning ? "自动上传中..." : "开始每秒自动截图"}
@@ -209,16 +208,16 @@ function MainInterface() {
               <button
                 onClick={stopAutoCapture}
                 disabled={!isAutoCaptureRunning}
-                className={`w-full py-5 rounded-3xl text-xl font-black flex items-center justify-center gap-3 transition-all duration-300 shadow-lg active:scale-95
+                className={`w-full py-5 rounded-3xl text-xl font-black flex items-center justify-center gap-3 transition-all duration-300 active:scale-95
                   ${isAutoCaptureRunning
-                    ? "bg-rose-600 text-white hover:bg-rose-700 hover:shadow-xl hover:-translate-y-1"
-                    : "bg-slate-300 text-slate-500 cursor-not-allowed"}`}
+                    ? "bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 hover:-translate-y-0.5"
+                    : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}
               >
                 <Square className="w-7 h-7" />
                 停止自动截图
               </button>
             </div>
-            <p className="text-center text-slate-400 text-xs mt-3">
+            <p className="text-center text-gray-400 text-xs mt-3">
               首次启动会弹出浏览器权限窗口，请选择要共享的手机投屏窗口或屏幕。
             </p>
           </div>
@@ -231,21 +230,21 @@ function MainInterface() {
 export default function Page() {
   return (
     <TaskProvider>
-      <main className="min-h-screen bg-slate-900 p-4 lg:p-6 font-sans flex flex-col">
+      <main className="min-h-screen p-4 lg:p-6 font-sans flex flex-col text-gray-900">
 
-        {/* Hackathon 专属头部 */}
+        {/* Header */}
         <header className="mb-6 text-center lg:text-left shrink-0 pl-2 mt-2">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
             <div>
-              <h1 className="text-3xl font-black text-white tracking-tight">Project: Safe Nav Agent</h1>
-              <p className="text-blue-400 font-mono mt-2 text-sm">Defensive Architecture &bull; Human-in-the-loop &bull; Verification First</p>
+              <h1 className="text-3xl font-black text-gray-900 tracking-tight">Svate · 通用手机 Agent</h1>
+              <p className="text-gray-400 font-mono mt-2 text-sm">Universal Mobile Agent &bull; Human-in-the-loop &bull; Verification First</p>
             </div>
             <StatusIndicator />
           </div>
-          <DemoModeWarningBanner />
+          <BackendStatusBanner />
         </header>
 
-        {/* 双栏网格：左侧产品体验，右侧评委黑箱 */}
+        {/* Two-column grid: product experience on the left, judge black box on the right */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_400px] xl:grid-cols-[1fr_500px] gap-8 min-h-0">
           <div className="h-full min-h-[750px] max-w-3xl mx-auto w-full">
             <MainInterface />

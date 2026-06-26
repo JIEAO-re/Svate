@@ -1,6 +1,12 @@
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 import { TelemetryEvent } from "@/lib/schemas/mobile-agent";
-import { POSTGRES_URL, assertPersistenceEnv } from "@/lib/mobile-agent/env";
+import {
+  DATABASE_SSL,
+  DATABASE_SSL_CA,
+  DATABASE_SSL_INSECURE,
+  POSTGRES_URL,
+  assertPersistenceEnv,
+} from "@/lib/mobile-agent/env";
 
 type TurnEventRecord = {
   trace_id: string;
@@ -59,7 +65,7 @@ type GeneratedMediaRecord = {
   created_at: string;
 };
 
-type MediaJobStatus = "PENDING" | "SUBMITTED" | "FAILED";
+type MediaJobStatus = "PENDING" | "SUBMITTED" | "SUCCEEDED" | "FAILED";
 
 type MediaJobRecord = {
   job_id: string;
@@ -76,16 +82,33 @@ type MediaJobRecord = {
 let pool: Pool | null = null;
 const TELEMETRY_BATCH_SIZE = 100;
 
-function getPool(): Pool {
+function buildSslConfig(): PoolConfig["ssl"] {
+  if (!DATABASE_SSL) return undefined;
+
+  if (DATABASE_SSL_INSECURE) {
+    console.warn(
+      "[persistence] WARNING: DATABASE_SSL_INSECURE=true — TLS CERTIFICATE VERIFICATION IS DISABLED. " +
+        "The database connection is vulnerable to man-in-the-middle attacks. " +
+        "Provide DATABASE_SSL_CA instead wherever possible.",
+    );
+    return { rejectUnauthorized: false };
+  }
+
+  // Secure default: verify the server certificate, optionally against a
+  // custom CA bundle provided as PEM content in DATABASE_SSL_CA.
+  return {
+    rejectUnauthorized: true,
+    ...(DATABASE_SSL_CA ? { ca: DATABASE_SSL_CA } : {}),
+  };
+}
+
+export function getPool(): Pool {
   if (pool) return pool;
   assertPersistenceEnv();
 
   pool = new Pool({
     connectionString: POSTGRES_URL,
-    ssl:
-      process.env.DATABASE_SSL === "true"
-        ? { rejectUnauthorized: false }
-        : undefined,
+    ssl: buildSslConfig(),
     max: Number(process.env.DATABASE_POOL_MAX || 10),
   });
 
@@ -272,6 +295,8 @@ export async function updateMediaJob(
     status: MediaJobStatus;
     operation_name?: string | null;
     error_message?: string | null;
+    /** Final media URI merged into the job payload when the job succeeds. */
+    video_uri?: string | null;
   },
 ) {
   const db = getPool();
@@ -282,6 +307,10 @@ export async function updateMediaJob(
       status = $2,
       operation_name = $3,
       error_message = $4,
+      payload = CASE
+        WHEN $5::text IS NULL THEN payload
+        ELSE payload || jsonb_build_object('video_uri', $5::text)
+      END,
       updated_at = NOW()
     WHERE job_id = $1
     `,
@@ -290,8 +319,25 @@ export async function updateMediaJob(
       params.status,
       params.operation_name ?? null,
       params.error_message ?? null,
+      params.video_uri ?? null,
     ],
   );
+}
+
+/**
+ * Read a media job's current status and operation name, or null if it does not
+ * exist. Used for Cloud Tasks idempotency so a retried job does not re-submit an
+ * already-submitted long-running operation.
+ */
+export async function getMediaJob(
+  jobId: string,
+): Promise<{ status: MediaJobStatus; operation_name: string | null } | null> {
+  const db = getPool();
+  const res = await db.query<{ status: MediaJobStatus; operation_name: string | null }>(
+    `SELECT status, operation_name FROM agent_media_jobs WHERE job_id = $1 LIMIT 1`,
+    [jobId],
+  );
+  return res.rows[0] ?? null;
 }
 
 export async function saveShadowDiff(record: ShadowDiffRecord) {
@@ -324,15 +370,30 @@ export async function saveShadowDiff(record: ShadowDiffRecord) {
 export async function saveTelemetryEvents(events: TelemetryEvent[]) {
   if (events.length === 0) return;
 
+  // ON CONFLICT DO NOTHING resolves duplicates against already-stored rows, but a
+  // single INSERT that lists the same client_event_id twice (a buggy/retried
+  // client batch) raises "cannot affect row a second time" and rolls back the
+  // whole batch. Drop intra-request duplicates up front, keeping the first; events
+  // without a client_event_id are always kept.
+  const seenClientIds = new Set<string>();
+  const deduped = events.filter((event) => {
+    const id = event.client_event_id;
+    if (!id) return true;
+    if (seenClientIds.has(id)) return false;
+    seenClientIds.add(id);
+    return true;
+  });
+  if (deduped.length === 0) return;
+
   const db = getPool();
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    for (let offset = 0; offset < events.length; offset += TELEMETRY_BATCH_SIZE) {
-      const batch = events.slice(offset, offset + TELEMETRY_BATCH_SIZE);
+    for (let offset = 0; offset < deduped.length; offset += TELEMETRY_BATCH_SIZE) {
+      const batch = deduped.slice(offset, offset + TELEMETRY_BATCH_SIZE);
       const values: Array<string | number | null> = [];
       const rows = batch.map((event, index) => {
-        const baseIndex = index * 6;
+        const baseIndex = index * 7;
         values.push(
           event.trace_id,
           event.session_id,
@@ -340,10 +401,13 @@ export async function saveTelemetryEvents(events: TelemetryEvent[]) {
           event.event_type,
           JSON.stringify(event.payload),
           event.ts ?? null,
+          event.client_event_id ?? null,
         );
-        return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}::jsonb, COALESCE($${baseIndex + 6}::timestamptz, NOW()))`;
+        return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}::jsonb, COALESCE($${baseIndex + 6}::timestamptz, NOW()), $${baseIndex + 7})`;
       });
 
+      // Deduplicate retried client batches via the partial unique index on
+      // client_event_id (events without a client_event_id are always inserted).
       await client.query(
         `
         INSERT INTO agent_telemetry_events (
@@ -352,8 +416,10 @@ export async function saveTelemetryEvents(events: TelemetryEvent[]) {
           turn_index,
           event_type,
           payload,
-          ts
+          ts,
+          client_event_id
         ) VALUES ${rows.join(", ")}
+        ON CONFLICT (client_event_id) WHERE client_event_id IS NOT NULL DO NOTHING
         `,
         values,
       );

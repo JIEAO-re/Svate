@@ -2,13 +2,13 @@
  * Regression tests.
  *
  * Covered scenarios:
- *   1. /analyze-screen returns a redirect hint (301) when no demo header is present
- *   2. /next-step works normally when schema validation passes
- *   3. Authentication failure path returns 401 when no token is provided
- *   4. High-risk actions must be blocked (arbiter HIGH risk -> WAIT)
- *   5. Dangerous intents such as delete or uninstall are intercepted by the arbiter
+ *   1. /next-step works normally when schema validation passes
+ *   2. Authentication failure paths reject invalid or missing credentials
+ *      (exercising the real auth-utils implementation)
+ *   3. High-risk actions must be blocked (arbiter HIGH risk -> WAIT)
+ *   4. Dangerous intents such as delete or uninstall are intercepted by the arbiter
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   NextStepRequestSchema,
   ActionCommandSchema,
@@ -16,6 +16,11 @@ import {
   type NextStepRequest,
 } from "@/lib/schemas/mobile-agent";
 import { arbitrateDecision } from "@/lib/mobile-agent/arbiter";
+import {
+  authenticateRequest,
+  verifyFirebaseAppCheck,
+  verifyJwtToken,
+} from "@/lib/mobile-agent/auth-utils";
 import type { ReviewerOutput } from "@/lib/schemas/mobile-agent";
 
 // ---------------------------------------------------------------------------
@@ -112,7 +117,7 @@ function approveReview(index = 0): ReviewerOutput {
 
 
 // ===================================================================
-// 2. Route switch: /next-step should work normally
+// 1. Route switch: /next-step should work normally
 // ===========================================================================
 describe("next-step normal processing", () => {
   it("valid request passes schema validation and arbiter produces a final action", () => {
@@ -143,43 +148,62 @@ describe("next-step normal processing", () => {
 });
 
 // ===========================================================================
-// 3. Authentication failure path: missing token should return 401
+// 2. Authentication failure paths exercised against the real auth-utils
 // ===========================================================================
 describe("authentication failure path", () => {
-  it("missing auth credentials results in authentication_failed response", () => {
-    // Verify the authenticateRequest logic used in next-step/route.ts:
-    // missing X-Firebase-AppCheck and missing Authorization header -> missing_auth_credentials
-    const hasAppCheckToken = false;
-    const hasAuthHeader = false;
-    const skipAuthDev = false;
+  const originalGoogleCloudProject = process.env.GOOGLE_CLOUD_PROJECT;
 
-    const authResult = (() => {
-      if (skipAuthDev) return { valid: true, client_id: "dev_bypass" };
-      if (hasAppCheckToken) return { valid: true, client_id: "appcheck:xxx" };
-      if (hasAuthHeader) return { valid: true, client_id: "jwt:xxx" };
-      return { valid: false, error: "missing_auth_credentials" };
-    })();
-
-    expect(authResult.valid).toBe(false);
-    expect(authResult.error).toBe("missing_auth_credentials");
+  afterEach(() => {
+    if (originalGoogleCloudProject === undefined) {
+      delete process.env.GOOGLE_CLOUD_PROJECT;
+    } else {
+      process.env.GOOGLE_CLOUD_PROJECT = originalGoogleCloudProject;
+    }
+    vi.restoreAllMocks();
   });
 
-  it("invalid JWT format is rejected", () => {
-    // JWT must start with "ey" because the JSON header is base64-encoded
-    const token = "not_a_valid_jwt";
-    const isValidFormat = token.startsWith("ey");
-    expect(isValidFormat).toBe(false);
+  it("missing auth credentials results in missing_auth_credentials", async () => {
+    const result = await authenticateRequest(
+      new Request("https://example.com/api/mobile-agent/next-step", {
+        method: "POST",
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      }),
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("missing_auth_credentials");
   });
 
-  it("short App Check token is rejected", () => {
-    const token = "short";
-    const isValidFormat = token.length >= 32;
-    expect(isValidFormat).toBe(false);
+  it("invalid JWT format is rejected by verifyJwtToken", async () => {
+    const result = await verifyJwtToken("not_a_valid_jwt");
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("invalid_jwt_format");
+  });
+
+  it("short App Check token is rejected by verifyFirebaseAppCheck", async () => {
+    const result = await verifyFirebaseAppCheck("short");
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("invalid_app_check_token_format");
+  });
+
+  it("App Check fails closed when GOOGLE_CLOUD_PROJECT is not configured", async () => {
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    // Long enough to pass the format pre-check; must still be rejected
+    // before any JWKS verification because the audience cannot be checked.
+    const result = await verifyFirebaseAppCheck("a".repeat(64));
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("app_check_project_not_configured");
+    expect(errorSpy).toHaveBeenCalled();
   });
 });
 
 // ===========================================================================
-// 4. High-risk actions must be blocked
+// 3. High-risk actions must be blocked
 // ===========================================================================
 describe("high risk action blocking", () => {
   it("HIGH risk action is blocked by arbiter even when reviewer approves", () => {
@@ -226,7 +250,7 @@ describe("high risk action blocking", () => {
 });
 
 // =========================================================================
-// 5. Dangerous intents are intercepted when they are outside the allowlist
+// 4. Dangerous intents are intercepted when they are outside the allowlist
 // ===========================================================================
 describe("dangerous intent blocking", () => {
   it("OPEN_INTENT with non-whitelisted action (DELETE) is blocked", () => {

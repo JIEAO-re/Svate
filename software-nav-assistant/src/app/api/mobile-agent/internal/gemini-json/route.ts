@@ -3,6 +3,8 @@ import { z } from "zod";
 import { getGenAIClient } from "@/lib/mobile-agent/genai-client";
 import { LEGACY_DEMO_MODEL } from "@/lib/mobile-agent/env";
 import { verifyInternalJobAuth } from "@/lib/mobile-agent/internal-auth";
+import { authenticateRequest } from "@/lib/mobile-agent/auth-utils";
+import { rateLimitGuard } from "@/lib/mobile-agent/rate-limit";
 
 const RequestSchema = z.object({
   prompt: z.string().min(1).max(50_000),
@@ -15,19 +17,34 @@ function cleanJsonText(raw: string): string {
 }
 
 export async function POST(req: Request) {
-  const authResult = verifyInternalJobAuth(req, {
+  // Accept either credential type: the internal job token (server-to-server)
+  // or regular device authentication (App Check / device JWT). Clients no
+  // longer need the server-side internal secret baked into the APK.
+  const internalAuth = verifyInternalJobAuth(req, {
     endpoint: "/api/mobile-agent/internal/gemini-json",
   });
-  if (!authResult.valid) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: "unauthorized_internal_job",
-        details: authResult.error,
-      },
-      { status: 401 },
-    );
+  let rateLimitIdentity = internalAuth.client_id;
+  if (!internalAuth.valid) {
+    const deviceAuth = await authenticateRequest(req);
+    if (!deviceAuth.valid) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "unauthorized_internal_job",
+          details: {
+            internal_auth: internalAuth.error,
+            device_auth: deviceAuth.error,
+          },
+        },
+        { status: 401 },
+      );
+    }
+    rateLimitIdentity = deviceAuth.client_id;
   }
+
+  // Per-identity rate limit keyed by whichever credential authorized the call.
+  const limited = await rateLimitGuard(rateLimitIdentity);
+  if (limited) return limited;
 
   try {
     const body = await req.json();

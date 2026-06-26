@@ -53,11 +53,16 @@ CREATE TABLE IF NOT EXISTS agent_telemetry_events (
   turn_index INT NOT NULL,
   event_type TEXT NOT NULL,
   payload JSONB NOT NULL,
-  ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Optional client-generated idempotency key for retried batches.
+  client_event_id TEXT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_telemetry_events_session_turn
   ON agent_telemetry_events(session_id, turn_index);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_telemetry_events_client_event_id
+  ON agent_telemetry_events(client_event_id)
+  WHERE client_event_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS agent_live_turn_metrics (
   id BIGSERIAL PRIMARY KEY,
@@ -107,3 +112,19 @@ CREATE TABLE IF NOT EXISTS agent_media_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_agent_media_jobs_session
   ON agent_media_jobs(session_id);
+
+-- Fixed-window request counters for per-identity rate limiting of the
+-- authenticated LLM routes. One row per (identity, window_start); the route
+-- handler atomically increments `count` via INSERT ... ON CONFLICT DO UPDATE.
+-- Rows are short-lived: `expires_at` marks the window end and lets a cleanup
+-- job (or the opportunistic in-handler DELETE) reclaim elapsed windows.
+CREATE TABLE IF NOT EXISTS agent_rate_limits (
+  identity TEXT NOT NULL,
+  window_start BIGINT NOT NULL,
+  count INT NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (identity, window_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_rate_limits_expires_at
+  ON agent_rate_limits(expires_at);
