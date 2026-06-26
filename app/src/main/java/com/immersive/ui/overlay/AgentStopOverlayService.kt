@@ -6,7 +6,9 @@ import android.content.Intent
 import com.immersive.ui.agent.AgentEventBus
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -14,15 +16,30 @@ import android.widget.FrameLayout
 import android.widget.TextView
 
 /**
- * Floating overlay for agent mode with a draggable red "Stop" button.
- * Tapping it notifies MainActivity through the SharedFlow event bus to stop the agent.
+ * Floating overlay shown while the agent is operating another app, with a draggable
+ * "stop" pill.
+ *
+ * Safety: a single tap NO LONGER kills the run. Because this button floats over the
+ * app the agent is driving (e.g. WeChat), a stray tap used to silently abort the task
+ * and leave behind confusing state. Tapping now ARMS the button (it turns red and reads
+ * "确认停止") and only a SECOND tap within a short window actually stops the agent;
+ * otherwise it disarms itself. ACTION_CANCEL gestures are ignored.
  */
 class AgentStopOverlayService : Service() {
 
     private var windowManager: WindowManager? = null
     private var floatView: FrameLayout? = null
+    private var label: TextView? = null
+
+    /** True after the first tap, while waiting for the confirming second tap. */
+    private var armed = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val disarmRunnable = Runnable { setArmed(false) }
 
     companion object {
+        /** How long the armed/confirm state stays active after the first tap. */
+        private const val ARM_WINDOW_MS = 2600L
+
         fun start(context: Context) {
             context.startService(Intent(context, AgentStopOverlayService::class.java))
         }
@@ -51,18 +68,18 @@ class AgentStopOverlayService : Service() {
     private fun buildOverlay() {
         val wm = windowManager ?: return
 
-        // Red circular button
-        val button = TextView(this).apply {
-            text = "✕ 停止"
+        val pill = TextView(this).apply {
+            text = idleText()
             textSize = 13f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            background = buildRoundBackground()
-            setPadding(32, 20, 32, 20)
+            background = buildPillBackground(IDLE_COLOR)
+            setPadding(40, 22, 40, 22)
         }
+        label = pill
 
         val frame = FrameLayout(this).also { floatView = it }
-        frame.addView(button)
+        frame.addView(pill)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -73,10 +90,11 @@ class AgentStopOverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.END
             x = 16
-            y = 200
+            // Sit lower than the status bar / app action bar so it is less likely to
+            // overlap the top-right controls of the app the agent is driving.
+            y = 320
         }
 
-        // Drag handling
         var initialX = 0; var initialY = 0
         var touchX = 0f; var touchY = 0f
         frame.setOnTouchListener { _, event ->
@@ -93,13 +111,12 @@ class AgentStopOverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    // Treat very small movement as a click.
                     val dx = event.rawX - touchX; val dy = event.rawY - touchY
-                    if (dx * dx + dy * dy < 100) {
-                        AgentEventBus.requestStop()
-                    }
+                    // Treat only a near-stationary release as a tap (not the end of a drag).
+                    if (dx * dx + dy * dy < 100) onTap()
                     true
                 }
+                // A system-cancelled gesture must never be read as a confirming tap.
                 else -> false
             }
         }
@@ -107,17 +124,48 @@ class AgentStopOverlayService : Service() {
         wm.addView(frame, params)
     }
 
-    private fun buildRoundBackground(): android.graphics.drawable.GradientDrawable {
+    /** First tap arms (shows "确认停止"); a second tap within the window actually stops. */
+    private fun onTap() {
+        if (armed) {
+            mainHandler.removeCallbacks(disarmRunnable)
+            AgentEventBus.requestStop()
+        } else {
+            setArmed(true)
+            mainHandler.removeCallbacks(disarmRunnable)
+            mainHandler.postDelayed(disarmRunnable, ARM_WINDOW_MS)
+        }
+    }
+
+    private fun setArmed(value: Boolean) {
+        armed = value
+        label?.apply {
+            text = if (value) "确认停止？" else idleText()
+            background = buildPillBackground(if (value) ARMED_COLOR else IDLE_COLOR)
+        }
+    }
+
+    private fun idleText(): String = "■ 停止"
+
+    private fun buildPillBackground(color: Int): android.graphics.drawable.GradientDrawable {
         return android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.RECTANGLE
             cornerRadius = 100f
-            setColor(Color.parseColor("#EF4444"))
+            setColor(color)
+            setStroke(2, Color.parseColor("#33000000"))
         }
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(disarmRunnable)
         floatView?.let { windowManager?.removeView(it) }
         floatView = null
+        label = null
         super.onDestroy()
     }
 }
+
+/** Resting pill color: a calm dark slate so it does not read as a hot kill-switch. */
+private val IDLE_COLOR = Color.parseColor("#2B2F36")
+
+/** Armed/confirm color: ChatGPT-style red. */
+private val ARMED_COLOR = Color.parseColor("#EF4444")

@@ -1,47 +1,68 @@
 package com.immersive.ui.ui.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 
-// Primary palette: warm blue-violet gradient tones
-val Primary = Color(0xFF6366F1)         // Indigo-500
-val PrimaryDark = Color(0xFF4F46E5)     // Indigo-600
-val PrimaryLight = Color(0xFFA5B4FC)    // Indigo-300
+/**
+ * Svate design tokens — the single source of truth for color.
+ *
+ * ChatGPT-style black-and-white: a neutral light canvas, near-black ink, and BLACK used as
+ * the single point of emphasis (avatar, send, selected states) — no green, no chromatic
+ * accents. Semantic states (danger/warning) are expressed in grayscale (inverted dark or
+ * mid-gray), not color. Light-only by product decision; no dynamic color, no dark variant.
+ */
+object SvateColors {
+    // Backgrounds / surfaces — neutral
+    val Canvas = Color(0xFFF7F7F8)        // app background
+    val Surface = Color(0xFFFFFFFF)       // cards, composer, assistant-area surfaces
+    val SurfaceMuted = Color(0xFFF2F2F3)  // drawer / secondary panels
 
-val Secondary = Color(0xFF8B5CF6)       // Violet-500
-val SecondaryLight = Color(0xFFC4B5FD)  // Violet-300
+    // Text — neutral near-black ramp
+    val TextPrimary = Color(0xFF171717)
+    val TextSecondary = Color(0xFF6E6E78)
+    val TextTertiary = Color(0xFF9A9AA2)
+    val TextOnDark = Color(0xFFF7F7F7)    // on the dark user bubble / black buttons
+    val TextOnAccent = Color(0xFFFFFFFF)  // on the black accent
 
-// Backgrounds
-val BgGradientStart = Color(0xFFF0F0FF) // 淡紫白
-val BgGradientEnd = Color(0xFFE8E6FF)   // 淡紫灰
-val SurfaceCard = Color(0xFFFFFFFF)
-val SurfaceDark = Color(0xFF1E1B2E)
+    // Bold dark user bubble (strong contrast against the light canvas)
+    val UserBubble = Color(0xFF171717)
 
-// Text
-val TextPrimary = Color(0xFF1E1B2E)
-val TextSecondary = Color(0xFF64748B)
-val TextMuted = Color(0xFF94A3B8)
+    // Accent — BLACK, emphasis only (avatar, send, selected). No green.
+    val Accent = Color(0xFF171717)
+    val AccentDeep = Color(0xFF000000)    // text/stroke on light, deep/pressed states
+    val AccentSoft = Color(0xFFEDEDED)    // soft gray fill: selected row, icon chips
 
-// Chat bubbles
-val BubbleUser = Color(0xFF6366F1)
-val BubbleUserText = Color.White
-val BubbleAssistant = Color(0xFFF1F5F9)
-val BubbleAssistantText = Color(0xFF1E293B)
+    // Borders / dividers — hairlines
+    val Border = Color(0xFFE5E5E5)
+    val BorderStrong = Color(0xFFD4D4D4)
+    val Divider = Color(0xFFECECEC)
 
-// Agent status
-val AgentActive = Color(0xFF10B981)     // Emerald-500
-val AgentWarning = Color(0xFFF59E0B)    // Amber-500
-val AgentDanger = Color(0xFFEF4444)     // Red-500
-val AgentInfo = Color(0xFF3B82F6)       // Blue-500
+    // Semantic — monochrome (no color): danger = inverted near-black, warning = mid-gray
+    val Danger = Color(0xFF171717)
+    val DangerSoft = Color(0xFFEDEDED)
+    val DangerBorder = Color(0xFFD4D4D4)
+    val Warning = Color(0xFF6E6E78)
+    val WarningSoft = Color(0xFFEDEDED)
 
-// Buttons
-val ButtonAccent = Color(0xFF6366F1)
-val ButtonSuccess = Color(0xFF10B981)
-val ButtonDanger = Color(0xFFEF4444)
+    // Loading / progress — black & white
+    val LoadingInk = Color(0xFF171717)         // typing dots / pulse dot
+    val TimelineDone = Color(0xFF171717)       // solid node  = completed step
+    val TimelineActive = Color(0xFF171717)     // pulsing ring = current step
+    val TimelinePending = Color(0xFFC9C9C9)    // hollow node = upcoming step
+    val TimelineLine = Color(0xFFE3E3E3)       // vertical connector
 
-// Keep legacy values for Theme.kt compatibility.
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+    // Glass — translucent bar base; alpha applied at call sites in vertical gradients.
+    val GlassTint = Color(0xFFF7F7F8)
+    val GlassHighlight = Color(0xFFFFFFFF)
+}
+
+/** Corner-radius scale, kept in one place so component shapes stay consistent. */
+object SvateShape {
+    val Pill = RoundedCornerShape(26.dp)     // composer
+    val Card = RoundedCornerShape(16.dp)     // cards, permission prompt, sheets
+    val Bubble = RoundedCornerShape(20.dp)   // user message bubble
+    val Field = RoundedCornerShape(12.dp)    // inputs, command card, list rows
+    val Chip = RoundedCornerShape(14.dp)     // suggestion / attachment chips
+    val Small = RoundedCornerShape(10.dp)    // badges, small buttons
+}

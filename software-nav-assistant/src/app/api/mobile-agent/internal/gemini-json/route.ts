@@ -4,6 +4,7 @@ import { getGenAIClient } from "@/lib/mobile-agent/genai-client";
 import { LEGACY_DEMO_MODEL } from "@/lib/mobile-agent/env";
 import { verifyInternalJobAuth } from "@/lib/mobile-agent/internal-auth";
 import { authenticateRequest } from "@/lib/mobile-agent/auth-utils";
+import { rateLimitGuard } from "@/lib/mobile-agent/rate-limit";
 
 const RequestSchema = z.object({
   prompt: z.string().min(1).max(50_000),
@@ -22,6 +23,7 @@ export async function POST(req: Request) {
   const internalAuth = verifyInternalJobAuth(req, {
     endpoint: "/api/mobile-agent/internal/gemini-json",
   });
+  let rateLimitIdentity = internalAuth.client_id;
   if (!internalAuth.valid) {
     const deviceAuth = await authenticateRequest(req);
     if (!deviceAuth.valid) {
@@ -37,7 +39,12 @@ export async function POST(req: Request) {
         { status: 401 },
       );
     }
+    rateLimitIdentity = deviceAuth.client_id;
   }
+
+  // Per-identity rate limit keyed by whichever credential authorized the call.
+  const limited = await rateLimitGuard(rateLimitIdentity);
+  if (limited) return limited;
 
   try {
     const body = await req.json();

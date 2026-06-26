@@ -4,6 +4,7 @@ import com.immersive.ui.agent.loop.PhoneTool
 import com.immersive.ui.agent.loop.RiskClass
 import com.immersive.ui.agent.loop.ToolContext
 import com.immersive.ui.agent.loop.ToolResult
+import com.immersive.ui.agent.shizuku.ShizukuTextInput
 import org.json.JSONObject
 
 /**
@@ -19,6 +20,20 @@ class TypeTextTool : PhoneTool {
     override val isReadOnly: Boolean = false
     override val riskClass: RiskClass = RiskClass.NORMAL
 
+    /**
+     * Defensive decode: the model sometimes URL/percent-encodes Chinese (e.g.
+     * "%E6%88%91%E6%83%B3%E4%BD%A0%E4%BA%86" for "我想你了"). type_text writes the string
+     * literally via ACTION_SET_TEXT, so a fully percent-encoded value would land as that
+     * raw "%..." text. When the WHOLE string is percent escapes, decode it back to real
+     * characters. A normal message containing a stray "%" does not match, so it is untouched.
+     */
+    private fun decodeIfPercentEncoded(text: String): String {
+        if (text.length >= 3 && text.matches(Regex("(?:%[0-9A-Fa-f]{2})+"))) {
+            return runCatching { java.net.URLDecoder.decode(text, "UTF-8") }.getOrDefault(text)
+        }
+        return text
+    }
+
     override fun parametersJsonSchema(): String {
         val props = JSONObject()
         props.put("text", ToolSupport.prop("string", "The text to type into the focused field."))
@@ -29,7 +44,7 @@ class TypeTextTool : PhoneTool {
     override suspend fun execute(args: JSONObject, ctx: ToolContext): ToolResult {
         val service = ctx.service()
             ?: return ToolResult(ok = false, text = "Accessibility service unavailable; typing not performed.")
-        val text = args.optString("text", "")
+        val text = decodeIfPercentEncoded(args.optString("text", ""))
         if (text.isBlank()) {
             return ToolResult(ok = false, text = "type_text requires non-empty text.")
         }
@@ -37,7 +52,17 @@ class TypeTextTool : PhoneTool {
         // back to the first editable node on the page, so we cannot type into the wrong field.
         val typed = service.performInputStrict(text)
         if (!typed) {
-            return ToolResult(ok = false, text = "No focused input field; tap the field first.")
+            // The focused field is not an accessible node (e.g. WeChat, whose UI tree is
+            // empty). Fall back to ADBKeyboard via Shizuku, which commits text through the
+            // InputConnection like a real keyboard, so the field need not be in the tree.
+            if (ShizukuTextInput.type(text)) {
+                return ToolResult(ok = true, text = "Typed \"$text\" via privileged keyboard.")
+            }
+            return ToolResult(
+                ok = false,
+                text = "No focused input field — tap the field first. (Privileged keyboard input is " +
+                    "unavailable: needs Shizuku ready and ADBKeyboard installed.)",
+            )
         }
         val submit = args.optBoolean("submit", false)
         if (!submit) {

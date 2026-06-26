@@ -24,7 +24,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 /**
  * Accessibility service for the agent, providing UI tree access and action execution.
  *
- * The system owns this service lifecycle, and OpenClawOrchestrator uses the static instance.
+ * The system owns this service lifecycle; the agent loop and its tools use the static instance.
  * The user must enable the service manually in system settings.
  */
 class AgentAccessibilityService : AccessibilityService() {

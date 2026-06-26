@@ -3,14 +3,29 @@ import { z } from "zod";
 import { getGenAIClient } from "@/lib/mobile-agent/genai-client";
 import { LEGACY_DEMO_MODEL, GENAI_CLIENT_ENABLED } from "@/lib/mobile-agent/env";
 import { authenticateRequest } from "@/lib/mobile-agent/auth-utils";
+import { rateLimitGuard } from "@/lib/mobile-agent/rate-limit";
 
 const ChatMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
   content: z.string().min(1).max(1000),
 });
 
+// One uploaded attachment. Images carry raw base64 (no data: prefix) and are
+// sent to the model as vision input; text-like files carry extracted UTF-8
+// text; other binaries are referenced by name only (the model can't read them
+// through the OpenAI-compatible image path).
+const AttachmentSchema = z.object({
+  kind: z.enum(["image", "file"]),
+  name: z.string().min(1).max(200),
+  mime_type: z.string().min(1).max(150),
+  size_bytes: z.number().int().nonnegative().max(8_000_000),
+  data_base64: z.string().max(11_000_000).optional(),
+  text_content: z.string().max(12_000).optional(),
+});
+
 const ChatRequestSchema = z.object({
   messages: z.array(ChatMessageSchema).min(1).max(40),
+  attachments: z.array(AttachmentSchema).max(4).default([]),
 });
 
 const AppCandidateSchema = z.object({
@@ -141,6 +156,10 @@ export async function POST(req: Request) {
     );
   }
 
+  // Per-device rate limit: cap expensive model calls per authenticated identity.
+  const limited = await rateLimitGuard(authResult.client_id);
+  if (limited) return limited;
+
   try {
     const rawBody = await req.json();
     const parsedBody = ChatRequestSchema.safeParse(rawBody);
@@ -148,11 +167,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "invalid_chat_goal_request" }, { status: 400 });
     }
 
-    const { messages } = parsedBody.data;
+    const { messages, attachments } = parsedBody.data;
     const conversation = messages
       .slice(-16)
       .map((msg) => `${msg.role === "user" ? "user" : "assistant"}: ${msg.content}`)
       .join("\n");
+
+    // Images become vision Parts; text-like files are inlined into the prompt;
+    // other binaries are noted by name so the model knows they exist.
+    const imageAttachments = attachments.filter((a) => a.kind === "image" && a.data_base64);
+    const fileNotes = attachments
+      .filter((a) => a.kind === "file")
+      .map((a) =>
+        a.text_content
+          ? `\n\n[用户上传文件 "${a.name}" (${a.mime_type})]:\n${a.text_content}`
+          : `\n\n[用户上传文件 "${a.name}" (${a.mime_type})，为二进制文件，内容未提取，仅文件名可见]`,
+      )
+      .join("");
 
     // Initialize the client per-request: a broken or partial GenAI config
     // should degrade to the deterministic fallback instead of a 500.
@@ -194,9 +225,24 @@ Rules:
 4) Keep response concise and safe.
     `.trim();
 
+    // Build a single prompt string, then attach images as inline vision Parts
+    // when present. An array `contents` is consumed natively by Gemini and
+    // converted to OpenAI `image_url` parts by the compat adapter, so this is
+    // provider-agnostic.
+    const promptText = `${systemPrompt}\n\nConversation:\n${conversation}${fileNotes}`;
+    const contents =
+      imageAttachments.length > 0
+        ? [
+            { text: promptText },
+            ...imageAttachments.map((a) => ({
+              inlineData: { mimeType: a.mime_type, data: a.data_base64 as string },
+            })),
+          ]
+        : promptText;
+
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
-      contents: `${systemPrompt}\n\nConversation:\n${conversation}`,
+      contents,
       config: {
         responseMimeType: "application/json",
         temperature: 0.2,

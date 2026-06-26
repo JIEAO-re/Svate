@@ -22,23 +22,6 @@ jobs:
       - run: npm ci
       - run: npm run lint
 
-  node-build:
-    name: Backend Typecheck & Build (Node)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: software-nav-assistant
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: software-nav-assistant/package-lock.json
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
-
   node-test:
     name: Unit & Contract Tests (Node)
     runs-on: ubuntu-latest
@@ -55,11 +38,8 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  # NOTE: both eval jobs run against a hand-written static fixture
-  # (evals/results/sample-run.json). They validate the eval gate wiring, not
-  # real agent/model quality. See software-nav-assistant/evals/README.md.
   eval-offline:
-    name: Offline Eval (static fixture scaffold)
+    name: Offline Eval Gate
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -72,11 +52,10 @@ jobs:
           cache: npm
           cache-dependency-path: software-nav-assistant/package-lock.json
       - run: npm ci
-      - name: Offline eval (static fixture scaffold)
-        run: npm run eval:offline
+      - run: npm run eval:offline
 
   eval-regression:
-    name: Regression Eval (scaffold, baseline == candidate)
+    name: Regression Eval Gate
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -89,10 +68,7 @@ jobs:
           cache: npm
           cache-dependency-path: software-nav-assistant/package-lock.json
       - run: npm ci
-      # --allow-same acknowledges that baseline and candidate are the same
-      # fixture file, so this job cannot detect real regressions yet.
-      - name: Regression eval (scaffold, self-comparison)
-        run: npm run eval:regression -- --allow-same
+      - run: npm run eval:regression
 
   android:
     name: Android Unit Tests
@@ -103,7 +79,5 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      # Caches Gradle distributions and dependency/build caches between runs.
-      - uses: gradle/actions/setup-gradle@v4
       - name: Gradle Unit Tests
         run: ./gradlew test

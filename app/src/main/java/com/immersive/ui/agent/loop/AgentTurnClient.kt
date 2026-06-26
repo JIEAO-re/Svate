@@ -67,7 +67,7 @@ interface TurnClient {
 /**
  * Thin client for `POST /api/mobile-agent/agent-turn`.
  *
- * Mirrors CloudDecisionClient exactly: BuildConfig base url/token/timeout, a
+ * Uses the standard device transport: BuildConfig base url/token/timeout, a
  * Bearer auth header only when the token is non-blank, an https requirement that
  * is relaxed only for emulator loopback hosts, defensive errorStream reads, and a
  * finally-disconnect. Serialization is hand-rolled with org.json; no extra
@@ -170,7 +170,7 @@ class AgentTurnClient : TurnClient {
             }
             val code = connection.responseCode
             // errorStream may be null when the connection failed before producing a
-            // body, so read it defensively just like CloudDecisionClient.
+            // body, so read it defensively.
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use(BufferedReader::readText).orEmpty()
             if (code !in 200..299) {
@@ -232,7 +232,7 @@ class AgentTurnClient : TurnClient {
     /**
      * Reject plain-http endpoints except emulator/loopback debug hosts, so auth
      * tokens and screen content are never sent in cleartext to a production
-     * server. Identical policy to CloudDecisionClient.
+     * server.
      */
     private fun requireSecureBaseUrl(url: URL) {
         if (url.protocol.equals("https", ignoreCase = true)) return

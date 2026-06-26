@@ -13,3 +13,10 @@ local.properties
 .env
 .env.*
 .env.local
+
+# Kotlin compiler cache
+.kotlin/
+
+# Local debug captures (emulator / phone screenshots) — not part of the project
+/_emu_*.png
+/_phone_*.png

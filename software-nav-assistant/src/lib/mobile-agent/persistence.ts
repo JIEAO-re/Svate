@@ -102,7 +102,7 @@ function buildSslConfig(): PoolConfig["ssl"] {
   };
 }
 
-function getPool(): Pool {
+export function getPool(): Pool {
   if (pool) return pool;
   assertPersistenceEnv();
 

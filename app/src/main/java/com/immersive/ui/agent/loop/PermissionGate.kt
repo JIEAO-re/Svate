@@ -36,7 +36,9 @@ data class PermissionQuery(
 /**
  * Permission gate implementing the decision order from agent-loop.md section 4:
  *
+ *   0. mode == EXPERIMENTAL                -> ALLOW (no gating at all)
  *   1. deny floor                         -> DENY
+ *   1b. mode == SAFE and HIGH risk        -> DENY (dangerous actions forbidden)
  *   2. effective HIGH risk                -> ASK (even in AUTO)
  *   3. allow-rule match                   -> ALLOW
  *   4. mode == AUTO                       -> ALLOW
@@ -71,10 +73,19 @@ class PermissionGate {
 
     /** Evaluate the gate for the given query and current [mode]. */
     fun evaluate(query: PermissionQuery, mode: PermissionMode): GateOutcome {
+        // 0. EXPERIMENTAL mode: no gating at all. Everything auto-runs, including the
+        // deny floor and HIGH-risk actions. Intentionally bypasses every backstop —
+        // this is the user's explicit opt-in "no confirmation, ever" mode.
+        if (mode == PermissionMode.EXPERIMENTAL) return GateOutcome.ALLOW
+
         // 1. Deny floor always wins.
         if (query.denyFloor) return GateOutcome.DENY
 
         val risk = effectiveRisk(query)
+
+        // 1b. SAFE mode: dangerous (HIGH-risk) actions are forbidden outright. The model
+        // is told "denied by safety policy" and re-routes to a safer path.
+        if (mode == PermissionMode.SAFE && risk == RiskClass.HIGH) return GateOutcome.DENY
 
         // 2. HIGH always asks, in both modes.
         if (risk == RiskClass.HIGH) return GateOutcome.ASK

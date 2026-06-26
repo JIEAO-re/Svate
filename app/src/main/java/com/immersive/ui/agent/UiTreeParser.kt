@@ -21,6 +21,9 @@ data class UiNode(
     val viewIdResourceName: String,
     val isVisibleToUser: Boolean = true,
     val isWithinScreen: Boolean = true,
+    // True for password/secure input fields. Their on-screen text must never be
+    // forwarded to the model (esp. the device-direct endpoint); renderers mask it.
+    val isPassword: Boolean = false,
 )
 
 /**
@@ -121,6 +124,7 @@ object UiTreeParser {
                     viewIdResourceName = node.viewIdResourceName.orEmpty(),
                     isVisibleToUser = isVisible,
                     isWithinScreen = isWithinScreen,
+                    isPassword = node.isPassword,
                 )
             }
 

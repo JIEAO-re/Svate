@@ -26,6 +26,18 @@ class ToolRegistryTest {
         "open_app",
         "launch_intent",
         "wait",
+        "web_search",
+        "list_files",
+        "read_file",
+        "write_file",
+        "move_file",
+        "delete_file",
+        "shell",
+        "force_stop_app",
+        "uninstall_package",
+        "grant_permission",
+        "revoke_permission",
+        "set_setting",
         "finish",
         "ask_user",
     )
@@ -108,12 +120,27 @@ class ToolRegistryTest {
         assertEquals(RiskClass.SAFE, registry.byName("wait")!!.riskClass)
         assertEquals(RiskClass.SAFE, registry.byName("finish")!!.riskClass)
         assertEquals(RiskClass.SAFE, registry.byName("ask_user")!!.riskClass)
+        assertEquals(RiskClass.SAFE, registry.byName("list_files")!!.riskClass)
+        assertEquals(RiskClass.SAFE, registry.byName("read_file")!!.riskClass)
+        assertEquals(RiskClass.NORMAL, registry.byName("write_file")!!.riskClass)
+        assertEquals(RiskClass.NORMAL, registry.byName("move_file")!!.riskClass)
+        assertEquals(RiskClass.HIGH, registry.byName("delete_file")!!.riskClass)
+        // Privileged Shizuku tools are all HIGH (always prompt, even in AUTO).
+        assertEquals(RiskClass.HIGH, registry.byName("shell")!!.riskClass)
+        assertEquals(RiskClass.HIGH, registry.byName("force_stop_app")!!.riskClass)
+        assertEquals(RiskClass.HIGH, registry.byName("uninstall_package")!!.riskClass)
+        assertEquals(RiskClass.HIGH, registry.byName("grant_permission")!!.riskClass)
+        assertEquals(RiskClass.HIGH, registry.byName("revoke_permission")!!.riskClass)
+        assertEquals(RiskClass.HIGH, registry.byName("set_setting")!!.riskClass)
     }
 
     @Test
     fun readOnlyFlags_matchContract() {
         val registry = ToolRegistry.createDefault()
-        val readOnly = setOf("take_screenshot", "read_ui_tree", "wait", "finish", "ask_user")
+        val readOnly = setOf(
+            "take_screenshot", "read_ui_tree", "wait", "web_search", "finish", "ask_user",
+            "list_files", "read_file",
+        )
         for (tool in registry.tools()) {
             assertEquals(
                 "isReadOnly mismatch for ${tool.name}",

@@ -39,3 +39,18 @@
     public static ** valueOf(java.lang.String);
     <fields>;
 }
+
+# Shizuku privileged UserService is instantiated reflectively by Shizuku in a separate
+# process; its AIDL Stub and both constructors (no-arg + Context) must survive R8. A
+# stable UserServiceArgs .tag() is set in code so renaming cannot change service identity.
+-keep class com.immersive.shizuku.IShizukuUserService { *; }
+-keep class com.immersive.shizuku.IShizukuUserService$Stub { *; }
+-keep class com.immersive.ui.agent.shizuku.ShizukuUserService { *; }
+-keepclassmembers class com.immersive.ui.agent.shizuku.ShizukuUserService {
+    <init>(...);
+}
+# The Shizuku api/provider artifacts ship no consumer rules; keep their surface.
+-keep class rikka.shizuku.** { *; }
+-keep class moe.shizuku.** { *; }
+-dontwarn rikka.shizuku.**
+-dontwarn moe.shizuku.**

@@ -1,9 +1,20 @@
 package com.immersive.ui.agent.loop
 
 import com.immersive.ui.agent.loop.tools.AskUserTool
+import com.immersive.ui.agent.loop.tools.DeleteFileTool
 import com.immersive.ui.agent.loop.tools.FinishTool
 import com.immersive.ui.agent.loop.tools.LaunchIntentTool
+import com.immersive.ui.agent.loop.tools.ListFilesTool
+import com.immersive.ui.agent.loop.tools.MoveFileTool
+import com.immersive.ui.agent.loop.tools.ForceStopAppTool
+import com.immersive.ui.agent.loop.tools.GrantPermissionTool
 import com.immersive.ui.agent.loop.tools.OpenAppTool
+import com.immersive.ui.agent.loop.tools.ReadFileTool
+import com.immersive.ui.agent.loop.tools.RevokePermissionTool
+import com.immersive.ui.agent.loop.tools.SetSettingTool
+import com.immersive.ui.agent.loop.tools.ShellTool
+import com.immersive.ui.agent.loop.tools.UninstallPackageTool
+import com.immersive.ui.agent.loop.tools.WriteFileTool
 import com.immersive.ui.agent.loop.tools.PressBackTool
 import com.immersive.ui.agent.loop.tools.PressHomeTool
 import com.immersive.ui.agent.loop.tools.ReadUiTreeTool
@@ -13,6 +24,7 @@ import com.immersive.ui.agent.loop.tools.TakeScreenshotTool
 import com.immersive.ui.agent.loop.tools.TapTool
 import com.immersive.ui.agent.loop.tools.TypeTextTool
 import com.immersive.ui.agent.loop.tools.WaitTool
+import com.immersive.ui.agent.loop.tools.WebSearchTool
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -71,6 +83,21 @@ class ToolRegistry private constructor(
                     OpenAppTool(),
                     LaunchIntentTool(),
                     WaitTool(),
+                    // Online information: search the web directly (no browser app needed).
+                    WebSearchTool(),
+                    // Direct file-system access (no screen needed; gated by All-files-access).
+                    ListFilesTool(),
+                    ReadFileTool(),
+                    WriteFileTool(),
+                    MoveFileTool(),
+                    DeleteFileTool(),
+                    // Privileged (Shizuku) device-admin tools.
+                    ShellTool(),
+                    ForceStopAppTool(),
+                    UninstallPackageTool(),
+                    GrantPermissionTool(),
+                    RevokePermissionTool(),
+                    SetSettingTool(),
                     FinishTool(),
                     AskUserTool(),
                 ),

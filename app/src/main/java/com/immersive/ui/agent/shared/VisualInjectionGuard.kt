@@ -1,4 +1,4 @@
-package com.immersive.ui.agent.flow
+package com.immersive.ui.agent.shared
 
 import com.immersive.ui.agent.UiNode
 

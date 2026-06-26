@@ -229,6 +229,37 @@ class PermissionGateTest {
         assertTrue(gate.activeRules().isEmpty())
     }
 
+    // ===== Rule 0: EXPERIMENTAL allows EVERYTHING (even HIGH / deny floor) =====
+
+    @Test
+    fun experimental_allows_denyFloor() {
+        val gate = PermissionGate()
+        val q = query("launch_intent", RiskClass.HIGH, isReadOnly = false, denyFloor = true)
+        assertEquals(GateOutcome.ALLOW, gate.evaluate(q, PermissionMode.EXPERIMENTAL))
+    }
+
+    @Test
+    fun experimental_allows_highRisk() {
+        val gate = PermissionGate()
+        val q = query("uninstall_package", RiskClass.HIGH, isReadOnly = false)
+        assertEquals(GateOutcome.ALLOW, gate.evaluate(q, PermissionMode.EXPERIMENTAL))
+    }
+
+    @Test
+    fun experimental_allows_payKeywordTarget() {
+        // Even a tap on a "支付" button auto-runs in EXPERIMENTAL (no keyword upgrade prompt).
+        val gate = PermissionGate()
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "支付")
+        assertEquals(GateOutcome.ALLOW, gate.evaluate(q, PermissionMode.EXPERIMENTAL))
+    }
+
+    @Test
+    fun experimental_allows_normalWrite() {
+        val gate = PermissionGate()
+        val q = query("type_text", RiskClass.NORMAL, isReadOnly = false, targetText = "hello")
+        assertEquals(GateOutcome.ALLOW, gate.evaluate(q, PermissionMode.EXPERIMENTAL))
+    }
+
     @Test
     fun allowRule_doesNotOverrideHighFloor() {
         // A GRANT_ALWAYS recorded for a tap that later targets a "pay" button must
@@ -241,5 +272,37 @@ class PermissionGateTest {
         assertTrue(gate.matchesAllowRule(benign))
         val risky = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Pay now", packageScope = "com.foo")
         assertEquals(GateOutcome.ASK, gate.evaluate(risky, PermissionMode.AUTO))
+    }
+
+    // ===== Rule 1b: SAFE forbids dangerous (HIGH) actions outright =====
+
+    @Test
+    fun safe_denies_highRisk() {
+        val gate = PermissionGate()
+        val q = query("uninstall_package", RiskClass.HIGH, isReadOnly = false)
+        assertEquals(GateOutcome.DENY, gate.evaluate(q, PermissionMode.SAFE))
+    }
+
+    @Test
+    fun safe_denies_payKeywordTap() {
+        // A tap on a "支付" button is upgraded to HIGH, so SAFE hard-denies it.
+        val gate = PermissionGate()
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "支付")
+        assertEquals(GateOutcome.DENY, gate.evaluate(q, PermissionMode.SAFE))
+    }
+
+    @Test
+    fun safe_asks_normalWrite() {
+        // Non-dangerous writes are not blocked in SAFE — they still ask.
+        val gate = PermissionGate()
+        val q = query("tap", RiskClass.NORMAL, isReadOnly = false, targetText = "Login")
+        assertEquals(GateOutcome.ASK, gate.evaluate(q, PermissionMode.SAFE))
+    }
+
+    @Test
+    fun safe_allows_readOnly() {
+        val gate = PermissionGate()
+        val q = query("take_screenshot", RiskClass.SAFE, isReadOnly = true)
+        assertEquals(GateOutcome.ALLOW, gate.evaluate(q, PermissionMode.SAFE))
     }
 }

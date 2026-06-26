@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Direct file-system control (list/read/write/move/delete in shared storage). This is
+         a special "All files access" permission the user grants once in system settings. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Shizuku: ADB/root-privileged operations (also merged from the provider lib; explicit here). -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <!-- Android 11+ package visibility: required so InstalledAppScanner can enumerate launcher apps. -->
     <queries>
@@ -53,6 +58,15 @@
             android:name=".agent.AgentCaptureService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- Shizuku provider: receives the privileged binder from the Shizuku server. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <service
             android:name=".agent.AgentAccessibilityService"

@@ -21,6 +21,8 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import android.os.SystemClock
+import android.view.Display
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.immersive.ui.R
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +32,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.coroutines.resume
 
@@ -50,6 +51,39 @@ class AgentCaptureService : Service() {
     /** Last capture timestamp; CAS-updated so concurrent captures throttle correctly. */
     private val lastCaptureAtMs = AtomicLong(0L)
     private val imageListenerHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    /**
+     * Guards the imageReader/virtualDisplay/screenWidth/screenHeight set so a capture
+     * cannot read pixels out of an ImageReader that a rotation is concurrently closing
+     * and replacing. The pixel copy runs off the main thread while onDisplayChanged
+     * fires on imageListenerHandler, so the two genuinely race.
+     */
+    private val captureLock = Any()
+
+    /**
+     * Bumped every time the reader is replaced (rotation/resize). A capture samples this
+     * before reading buffer bytes; if it changed after the frame was acquired, the frame
+     * came from a now-closed reader with stale dimensions and is dropped instead of copied.
+     */
+    private var captureGeneration: Int = 0
+
+    private var displayManager: DisplayManager? = null
+
+    /**
+     * Recreate the capture surface when the display geometry changes. The VirtualDisplay
+     * and ImageReader are pinned to the dimensions captured at startProjection() time, so
+     * after a rotation the mirrored frame keeps the old size while the live UI tree (and
+     * every tap path, which scales against getScreenSize()) reports the rotated bounds.
+     * That mismatch misaligns SoM markers and x-y taps until the surface is resized.
+     */
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId != Display.DEFAULT_DISPLAY) return
+            resizeCaptureIfNeeded()
+        }
+    }
 
     /**
      * API 34+ requires a MediaProjection.Callback to be registered before
@@ -124,36 +158,109 @@ class AgentCaptureService : Service() {
             // Required on API 34+ before createVirtualDisplay (see projectionCallback).
             projection?.registerCallback(projectionCallback, imageListenerHandler)
 
-            val metrics = resources.displayMetrics
-            screenWidth = max(720, metrics.widthPixels)
-            screenHeight = max(1280, metrics.heightPixels)
+            val (width, height) = currentDisplaySize()
+            synchronized(captureLock) {
+                screenWidth = width
+                screenHeight = height
+                imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+                virtualDisplay = projection?.createVirtualDisplay(
+                    "agent-capture",
+                    width, height, resources.displayMetrics.densityDpi,
+                    // No flags: a MediaProjection virtual display already mirrors the
+                    // captured screen into our ImageReader surface. VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR
+                    // is a DisplayManager concept meant for non-projection displays; passing it
+                    // here is redundant and, on some OEM ROMs (e.g. ColorOS), makes other apps
+                    // render masked/blacked-out when switched to while the projection is live.
+                    0,
+                    imageReader?.surface, null, null,
+                )
+            }
 
-            imageReader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
-            virtualDisplay = projection?.createVirtualDisplay(
-                "agent-capture",
-                screenWidth, screenHeight, metrics.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader?.surface, null, null,
-            )
+            // Track rotation/resize so the surface follows the live display geometry.
+            displayManager = (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).also {
+                it.registerDisplayListener(displayListener, imageListenerHandler)
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "startProjection failed", t)
             stopProjection()
         }
     }
 
+    /**
+     * Recreate the ImageReader and resize the VirtualDisplay to the current display size
+     * when it no longer matches what we are capturing at (the rotation case). Runs on
+     * imageListenerHandler. Holds captureLock for the whole swap and bumps captureGeneration
+     * so an in-flight capture detects the stale reader before touching its buffer.
+     */
+    private fun resizeCaptureIfNeeded() {
+        try {
+            val (width, height) = currentDisplaySize()
+            synchronized(captureLock) {
+                val display = virtualDisplay ?: return
+                if (width == screenWidth && height == screenHeight) return
+
+                val oldReader = imageReader
+                val newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+                // Detach the old surface before resizing, then attach the new one. Closing
+                // the old reader last guarantees its surface is no longer the display target.
+                display.surface = null
+                display.resize(width, height, resources.displayMetrics.densityDpi)
+                display.surface = newReader.surface
+
+                imageReader = newReader
+                screenWidth = width
+                screenHeight = height
+                captureGeneration++
+                try {
+                    oldReader?.close()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "old imageReader close failed", t)
+                }
+            }
+            Log.d(TAG, "capture surface resized to ${width}x$height")
+        } catch (t: Throwable) {
+            Log.e(TAG, "resizeCaptureIfNeeded failed", t)
+        }
+    }
+
+    /**
+     * Live full-screen size in pixels, matching AgentAccessibilityService.getScreenSize()
+     * (WindowManager.currentWindowMetrics.bounds) so the screenshot resolution and the
+     * coordinate space used by every tap path stay in lockstep. minSdk is 33, so the
+     * current-window-metrics API is always available.
+     */
+    private fun currentDisplaySize(): Pair<Int, Int> {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val bounds = wm.currentWindowMetrics.bounds
+        return bounds.width() to bounds.height()
+    }
+
     private fun stopProjection() {
         try {
-            virtualDisplay?.release()
+            displayManager?.unregisterDisplayListener(displayListener)
         } catch (t: Throwable) {
-            Log.w(TAG, "virtualDisplay release failed", t)
+            Log.w(TAG, "displayListener unregister failed", t)
         }
-        virtualDisplay = null
-        try {
-            imageReader?.close()
-        } catch (t: Throwable) {
-            Log.w(TAG, "imageReader close failed", t)
+        displayManager = null
+
+        synchronized(captureLock) {
+            try {
+                virtualDisplay?.release()
+            } catch (t: Throwable) {
+                Log.w(TAG, "virtualDisplay release failed", t)
+            }
+            virtualDisplay = null
+            try {
+                imageReader?.close()
+            } catch (t: Throwable) {
+                Log.w(TAG, "imageReader close failed", t)
+            }
+            imageReader = null
+            // Invalidate any frame an in-flight capture acquired before this teardown so
+            // it is dropped instead of copied out of the just-closed reader.
+            captureGeneration++
         }
-        imageReader = null
+
         try {
             projection?.unregisterCallback(projectionCallback)
         } catch (t: Throwable) {
@@ -193,7 +300,14 @@ class AgentCaptureService : Service() {
      * on the Default dispatcher. Returns null when no frame is available.
      */
     private suspend fun captureJpegBytes(): ByteArray? {
-        val reader = imageReader ?: return null
+        // Snapshot the reader and the resize generation together so the frame we acquire
+        // can be matched against the reader that was current when we started.
+        val reader: ImageReader
+        val genAtStart: Int
+        synchronized(captureLock) {
+            reader = imageReader ?: return null
+            genAtStart = captureGeneration
+        }
         throttleCaptureIfNeeded()
 
         // VirtualDisplay may not have delivered a frame yet.
@@ -206,36 +320,47 @@ class AgentCaptureService : Service() {
                 delay(ACQUIRE_RETRY_DELAY_MS)
             }
         }
-        if (image == null) {
+        val acquired = image
+        if (acquired == null) {
             Log.w(TAG, "acquireLatestImage returned null after $MAX_ACQUIRE_RETRIES attempts")
             return null
         }
 
-        // Extract a bitmap copy from Image pixels; Image must be closed on this thread.
-        val plane = image.planes[0]
-        val pixelStride = plane.pixelStride
-        val rowStride = plane.rowStride
-        val rowPadding = rowStride - pixelStride * image.width
-        val imgWidth = image.width
-        val imgHeight = image.height
-
-        var rawBitmap: Bitmap? = null
-        try {
-            rawBitmap = Bitmap.createBitmap(
-                imgWidth + rowPadding / pixelStride,
-                imgHeight,
-                Bitmap.Config.ARGB_8888,
-            )
-            rawBitmap.copyPixelsFromBuffer(plane.buffer)
-        } catch (t: Throwable) {
-            Log.e(TAG, "captureJpegBytes: pixel copy failed", t)
-            rawBitmap?.recycle()
-            // The finally block closes the image; do not close it twice here.
-            return null
-        } finally {
-            image.close()
-        }
-        val sourceBitmap = rawBitmap ?: return null
+        // Copy the pixels under captureLock so a concurrent rotation cannot close this
+        // reader mid-copy (use-after-free), and read every stride/dimension from the
+        // Image itself so the bitmap is self-consistent. If the generation advanced while
+        // we were acquiring, the frame belongs to a replaced reader with stale dimensions:
+        // drop it and let the caller's retry loop grab a correctly sized frame.
+        var imgWidth = 0
+        var imgHeight = 0
+        val sourceBitmap: Bitmap = synchronized(captureLock) {
+            if (captureGeneration != genAtStart) {
+                acquired.close()
+                return@synchronized null
+            }
+            val plane = acquired.planes[0]
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = rowStride - pixelStride * acquired.width
+            imgWidth = acquired.width
+            imgHeight = acquired.height
+            var bmp: Bitmap? = null
+            try {
+                bmp = Bitmap.createBitmap(
+                    imgWidth + rowPadding / pixelStride,
+                    imgHeight,
+                    Bitmap.Config.ARGB_8888,
+                )
+                bmp.copyPixelsFromBuffer(plane.buffer)
+                bmp
+            } catch (t: Throwable) {
+                Log.e(TAG, "captureJpegBytes: pixel copy failed", t)
+                bmp?.recycle()
+                null
+            } finally {
+                acquired.close()
+            }
+        } ?: return null
 
         // Move heavy work (crop, scale, JPEG encode) to the Default dispatcher pool.
         return withContext(Dispatchers.Default) {
@@ -329,7 +454,10 @@ class AgentCaptureService : Service() {
                     }
                     if (img == null) return@OnImageAvailableListener
                     if (cont.isActive) {
-                        source.setOnImageAvailableListener(null, null)
+                        try {
+                            source.setOnImageAvailableListener(null, null)
+                        } catch (_: Throwable) {
+                        }
                         cont.resume(img)
                     } else {
                         // Resumed/cancelled already: close the late frame so it is not
@@ -337,9 +465,19 @@ class AgentCaptureService : Service() {
                         img.close()
                     }
                 }
-                reader.setOnImageAvailableListener(listener, imageListenerHandler)
+                try {
+                    reader.setOnImageAvailableListener(listener, imageListenerHandler)
+                } catch (t: Throwable) {
+                    // The reader was closed (e.g. a rotation replaced it) before we could
+                    // attach: resume with null so the caller retries on the new reader.
+                    if (cont.isActive) cont.resume(null)
+                    return@suspendCancellableCoroutine
+                }
                 cont.invokeOnCancellation {
-                    reader.setOnImageAvailableListener(null, null)
+                    try {
+                        reader.setOnImageAvailableListener(null, null)
+                    } catch (_: Throwable) {
+                    }
                 }
             }
         }

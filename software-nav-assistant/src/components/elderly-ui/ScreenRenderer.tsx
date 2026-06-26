@@ -53,9 +53,9 @@ export function ScreenRenderer() {
                 width: `${((bbox[3] - bbox[1]) / 10) }%`,
               }}
             >
-              <div className="absolute left-1/2 -translate-x-1/2 -top-28 h-24 w-1.5 bg-gradient-to-b from-fuchsia-300 via-cyan-300 to-transparent rounded-full" />
+              <div className="absolute left-1/2 -translate-x-1/2 -top-28 h-24 w-1.5 bg-gradient-to-b from-white via-gray-300 to-transparent rounded-full" />
 
-              <div className="absolute -inset-2 rounded-2xl p-[7px] lock-rainbow-border shadow-[0_0_36px_rgba(59,130,246,0.42)]">
+              <div className="absolute -inset-2 rounded-2xl p-[7px] lock-rainbow-border shadow-[0_0_36px_rgba(255,255,255,0.35)]">
                 <div className="w-full h-full rounded-xl bg-black/15 border border-white/25 backdrop-blur-[1px]" />
               </div>
 
@@ -69,7 +69,7 @@ export function ScreenRenderer() {
           {/* Full-screen radar scan animation while the AI is analyzing */}
           {isLoading && (
             <div className="absolute inset-0 z-20 pointer-events-none overflow-hidden flex flex-col items-center justify-center">
-               <div className="w-full h-2 bg-blue-500/80 shadow-[0_0_20px_theme(colors.blue.400)] absolute left-0 animate-[scan_2s_ease-in-out_infinite]" />
+               <div className="w-full h-2 bg-white/80 shadow-[0_0_20px_rgba(255,255,255,0.6)] absolute left-0 animate-[scan_2s_ease-in-out_infinite]" />
                <div className="bg-black/80 text-white text-xl font-bold px-6 py-3 rounded-full mt-10 tracking-widest">
                  小助手正在看屏幕...
                </div>

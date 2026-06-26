@@ -6,6 +6,7 @@ import {
   type SessionRecapPayload,
 } from "@/lib/mobile-agent/session-recap-video";
 import { verifyInternalJobAuth } from "@/lib/mobile-agent/internal-auth";
+import { rateLimitGuard } from "@/lib/mobile-agent/rate-limit";
 
 const SessionRecapPayloadSchema = z.object({
   job_id: z.string().min(1),
@@ -33,6 +34,11 @@ export async function POST(req: Request) {
       { status: 401 },
     );
   }
+
+  // Per-identity rate limit keyed by the internal job credential. Veo recap
+  // generation is expensive; this caps the per-caller request rate.
+  const limited = await rateLimitGuard(authResult.client_id);
+  if (limited) return limited;
 
   try {
     const body = await req.json();

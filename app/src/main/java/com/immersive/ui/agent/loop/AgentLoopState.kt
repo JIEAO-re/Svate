@@ -81,6 +81,28 @@ class AgentLoopState(
         entries.add(RawEntry("user", JSONArray().put(JSONObject().put("text", text))))
     }
 
+    /**
+     * Append a user message carrying attachment image(s) (uploaded photos / rendered PDF
+     * pages). Unlike a screen [appendObservation], these are RawEntry parts, so their
+     * inline images are ALWAYS serialized — user attachments must persist, not be dropped
+     * by the latest-observation-only image discipline.
+     */
+    fun appendUserAttachments(text: String, imagesBase64: List<String>, mimeType: String = "image/jpeg") {
+        val parts = JSONArray()
+        if (text.isNotBlank()) parts.put(JSONObject().put("text", text))
+        for (b64 in imagesBase64) {
+            if (b64.isBlank()) continue
+            parts.put(
+                JSONObject().apply {
+                    put("inline_image_base64", b64)
+                    put("mime_type", mimeType)
+                },
+            )
+        }
+        if (parts.length() == 0) return
+        entries.add(RawEntry("user", parts))
+    }
+
     /** Append the model's narration text for this turn (kept for context). */
     fun appendModelText(text: String) {
         if (text.isBlank()) return

@@ -3,20 +3,25 @@ import {
   SCREENSHOT_UPLOAD_BUCKET,
   GUIDE_MEDIA_BUCKET,
   LEGACY_GCS_BUCKET_NAME,
+  NODE_ENV,
 } from "@/lib/mobile-agent/env";
 
 /**
  * A device-supplied gcs_uri is fed to the model directly as fileData, so the
  * model reads that object with the server's own credentials. Restrict it to the
  * app's configured buckets to prevent a malicious device from referencing any
- * other bucket the service account can read (read-scope escalation / SSRF). When
- * no bucket is configured the check cannot be enforced and is skipped.
+ * other bucket the service account can read (read-scope escalation / SSRF).
+ *
+ * When no bucket is configured the allowlist cannot be enforced. In production
+ * that is a misconfiguration we must not silently fall through on, so we fail
+ * closed (reject every gcs_uri). Outside production we stay permissive so local
+ * dev and tests can exercise gcs_uri frames without a bucket configured.
  */
 function gcsUriBucketAllowed(uri: string): boolean {
   const allowed = [SCREENSHOT_UPLOAD_BUCKET, GUIDE_MEDIA_BUCKET, LEGACY_GCS_BUCKET_NAME]
     .map((b) => b.trim())
     .filter((b) => b.length > 0);
-  if (allowed.length === 0) return true;
+  if (allowed.length === 0) return NODE_ENV !== "production";
   const match = /^gs:\/\/([^/]+)\//.exec(uri);
   if (!match) return false;
   return allowed.includes(match[1]);

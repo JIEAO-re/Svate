@@ -11,7 +11,7 @@ It combines an Android runtime that can inspect the UI, capture the screen, and 
 ## Why It Is Interesting
 
 - It is not a screenshot-only toy. The Android side keeps UI tree access, text-based actions, SoM markers, and coordinate-driven execution paths together.
-- It is designed as an agent runtime, not just a demo script. The orchestration loop is split into observation, planning, safety, execution, and verification modules.
+- It is designed as an agent runtime, not just a demo script. The device owns a Claude-Code-style turn loop: a tool registry the model drives via function calling, a risk-based permission gate, and on-screen prompt-injection defense.
 - It already includes practical engineering pieces that matter in real runs: screenshot transport via signed GCS uploads, telemetry persistence, auth guards, and regression tests.
 
 ## Core Capabilities
@@ -19,6 +19,7 @@ It combines an Android runtime that can inspect the UI, capture the screen, and 
 - Read current UI structure from Accessibility.
 - Capture screenshot frames through MediaProjection.
 - Execute taps, typing, scrolling, back, home, app launch, and direct intent paths.
+- Search the web directly via a `web_search` tool (Tavily / Brave / self-hosted SearXNG), so the agent can look things up without driving a browser app.
 - Use Spatial Grounding, SoM markers, selectors, and legacy bbox fallback as targeting strategies.
 - Upload screenshots through signed GCS URLs instead of inlining large payloads by default.
 - Run safety checks before execution, including high-risk action interception and visual injection defense.
@@ -26,13 +27,14 @@ It combines an Android runtime that can inspect the UI, capture the screen, and 
 
 ## Architecture
 
-Android app:
+Android app (on-device agent loop):
 
-- `ObservationModule`: UI tree parsing, frame capture, screenshot upload.
-- `PlanningModule`: task decomposition and cloud decision requests.
-- `SafetyModule`: action sanitization, high-risk checks, confirmation gates.
-- `ExecutionModule`: Accessibility-driven action execution and app launch.
-- `VerificationModule`: checkpoint validation and step recording.
+- `AgentLoop`: the turn loop. Each turn rebuilds the system prompt from the device's real-time capabilities, calls the model with function calling, executes the chosen tool locally, and feeds a fresh observation back.
+- `ToolRegistry` / `PhoneTool`: the tool set the model can call — screenshot, UI-tree read, tap/type/scroll/back/home, app launch, intents, files, `web_search`, and privileged Shizuku admin tools.
+- `PermissionGate`: per-action risk gating (SAFE/LOW/NORMAL/HIGH risk × ASK/AUTO/SAFE/EXPERIMENTAL modes) with a deny floor and keyword interception.
+- Observation & defense: `UiTreeParser` + `UiNodePruner` (UI tree), `AgentCaptureService` (MediaProjection frames), and `VisualInjectionGuard` (on-screen prompt-injection screening).
+
+The model can be called either device-direct (the device talks straight to an OpenAI-compatible endpoint) or through the Next.js backend, which acts as a model proxy. Tools always execute on-device, so they work in both modes.
 
 Server:
 

@@ -59,6 +59,31 @@ export const FRAME_WINDOW_SIZE = Number(process.env.FRAME_WINDOW_SIZE || 3);
 export const FRAME_DEDUP_ENABLED =
   process.env.FRAME_DEDUP_ENABLED?.trim().toLowerCase() !== "false";
 
+// Per-device rate limiting for the authenticated LLM routes. A single valid
+// device token must not be able to issue unbounded expensive model calls, so
+// each route enforces a sliding/fixed-window request budget keyed by the
+// authenticated identity. The limiter prefers the shared Postgres store so the
+// budget is enforced across Cloud Run instances; it falls back to a best-effort
+// in-memory counter and always fails open if the backend is unavailable.
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+// Requests allowed per window per identity. Set MOBILE_AGENT_RPM_LIMIT<=0 to
+// disable rate limiting entirely.
+export const MOBILE_AGENT_RPM_LIMIT = (() => {
+  const raw = process.env.MOBILE_AGENT_RPM_LIMIT?.trim();
+  if (raw === undefined || raw === "") return 60;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : 60;
+})();
+// Window length in seconds; defaults to a one-minute (RPM) window.
+export const MOBILE_AGENT_RATE_WINDOW_SEC = parsePositiveInt(
+  process.env.MOBILE_AGENT_RATE_WINDOW_SEC,
+  60,
+);
+
 export function assertGenAiEnv() {
   if (OPENAI_COMPAT_ENABLED) {
     invariant(

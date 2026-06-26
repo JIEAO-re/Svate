@@ -229,24 +229,6 @@ data class AgentAction(
     val decisionRequest: DecisionRequest? = null,
     val knowledgeCapture: KnowledgeCapture? = null,
 ) {
-    /**
-     * Get the preferred targeting strategy.
-     * Priority: SPATIAL_COORDINATES > SOM_ID > SELECTOR > LEGACY_BBOX
-     */
-    fun getPreferredTargetingMethod(): TargetingMethod? {
-        return ActionResolver.detectTargetingMethod(
-            spatialCoordinates = spatialCoordinates?.toList(),
-            targetSomId = targetSomId,
-            selector = selector,
-            targetBbox = targetBbox,
-        )
-    }
-
-    /** Whether the action uses pure visual Spatial Grounding targeting. */
-    fun usesSpatialGrounding(): Boolean {
-        return spatialCoordinates != null && spatialCoordinates.size == 2
-    }
-
     // Array fields need content-based equality; the generated implementation
     // would compare targetBbox and spatialCoordinates by reference.
     override fun equals(other: Any?): Boolean {
@@ -382,6 +364,24 @@ data class AgentContext(
     }
 }
 
+/**
+ * Task decomposition domain types. Formerly defined alongside the flow-only
+ * TaskPlanner (now removed); kept here because [AgentContext] holds a [TaskPlan]
+ * and exposes its sub-steps via currentSubStep()/isAllSubStepsDone().
+ */
+data class SubStep(
+    val index: Int,
+    val description: String,
+    val expectedResult: String,
+    val maxAttempts: Int = 5,
+)
+
+data class TaskPlan(
+    val goal: String,
+    val targetApp: String,
+    val steps: List<SubStep>,
+)
+
 data class SafetyCheckResult(
     val allowed: Boolean,
     val reason: String? = null,
@@ -422,13 +422,15 @@ object AgentActionSafety {
     )
 
     /**
-     * Precompiled matchers: English keywords use word-boundary regexes so short
-     * words like "pay" or "order" do not false-match inside "display" or
-     * "recorder"; Chinese keywords keep substring matching (no word boundaries
-     * in CJK text) and are stored with a null regex.
+     * Build keyword matchers with consistent semantics: ASCII keywords use
+     * word-boundary regexes so short words like "pay" or "order" do not
+     * false-match inside "display"/"recorder"; CJK keywords keep substring
+     * matching (no word boundaries in CJK text) and are stored with a null regex.
+     * Exposed so other guards (e.g. IntentGuard) share identical matching instead
+     * of ad-hoc substring scans that over-block.
      */
-    private val HARD_BLOCK_KEYWORD_MATCHERS: List<Pair<String, Regex?>> =
-        HARD_BLOCK_KEYWORDS.map { keyword ->
+    fun buildKeywordMatchers(keywords: List<String>): List<Pair<String, Regex?>> =
+        keywords.map { keyword ->
             val regex = if (keyword.any { it.code > 127 }) {
                 null
             } else {
@@ -436,6 +438,18 @@ object AgentActionSafety {
             }
             keyword to regex
         }
+
+    /** True if [text] matches any of the [matchers] built by [buildKeywordMatchers]. */
+    fun matchesAnyKeyword(text: String?, matchers: List<Pair<String, Regex?>>): Boolean {
+        val normalized = text.orEmpty().lowercase()
+        if (normalized.isBlank()) return false
+        return matchers.any { (keyword, regex) ->
+            regex?.containsMatchIn(normalized) ?: normalized.contains(keyword)
+        }
+    }
+
+    private val HARD_BLOCK_KEYWORD_MATCHERS: List<Pair<String, Regex?>> =
+        buildKeywordMatchers(HARD_BLOCK_KEYWORDS)
 
     fun validateClickBbox(
         bbox: IntArray?,
@@ -457,13 +471,8 @@ object AgentActionSafety {
         return SafetyCheckResult(true)
     }
 
-    fun containsHardBlockedKeyword(text: String?): Boolean {
-        val normalized = text.orEmpty().lowercase()
-        if (normalized.isBlank()) return false
-        return HARD_BLOCK_KEYWORD_MATCHERS.any { (keyword, regex) ->
-            regex?.containsMatchIn(normalized) ?: normalized.contains(keyword)
-        }
-    }
+    fun containsHardBlockedKeyword(text: String?): Boolean =
+        matchesAnyKeyword(text, HARD_BLOCK_KEYWORD_MATCHERS)
 
     fun isKnownLauncherPackage(
         packageName: String?,

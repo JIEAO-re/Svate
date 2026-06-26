@@ -19,8 +19,18 @@ import kotlin.coroutines.resume
  */
 internal object ToolSupport {
 
-    /** Default timeout for a single gesture dispatch, mirroring AccessibilityMotor. */
+    /** Default timeout for a single gesture dispatch. */
     const val GESTURE_TIMEOUT_MS = 3_000L
+
+    /**
+     * Max UI nodes per observation. The pruner ranks by importance and returns at most
+     * this many — but only as many as actually exist, so on a normal screen (well under
+     * this) it behaves like "no truncation". Set high so complex apps (WeChat/Taobao) do
+     * not lose actionable elements like the send button. Trade-off: a genuinely dense
+     * screen yields a large observation, and observation text accumulates across the
+     * task's turns, so very high values raise token cost / latency.
+     */
+    const val OBSERVATION_NODE_CAP = 1000
 
     /**
      * Bridge a callback-style gesture (`fun(x, cb)`) into a suspend boolean.
@@ -55,6 +65,34 @@ internal object ToolSupport {
         return schema.toString()
     }
 
+    /**
+     * Secret-like tokens (API keys) that must never reach the model. The agent reads
+     * the UI tree of whatever is on screen; if a screen ever shows the user's API key
+     * (Svate's own settings field, or a search box a prior mis-type left it in), the
+     * raw key would otherwise enter the model's context and could be echoed back into
+     * a device action. Redacting here — the single chokepoint every observation passes
+     * through — keeps secrets out of context and breaks that self-reinforcing loop.
+     * Pure function (no android.* calls) so renderNodes stays JVM-unit-testable.
+     */
+    // sk- keeps its own replacement token: it is the most common leak (OpenAI /
+    // Anthropic style) and tests/operators recognise the "sk-‹redacted›" marker.
+    private val SK_TOKEN = Regex("sk-[A-Za-z0-9_-]{12,}")
+
+    // Other provider key/token shapes. Kept specific (prefix + length) so ordinary
+    // on-screen text the agent must read is not over-redacted.
+    private val OTHER_SECRET_TOKENS = listOf(
+        Regex("AIza[0-9A-Za-z_-]{20,}"),            // Google API keys
+        Regex("gh[pousr]_[A-Za-z0-9]{20,}"),        // GitHub tokens
+        Regex("(?i)bearer\\s+[A-Za-z0-9._~+/=-]{12,}"), // Authorization: Bearer <token>
+    )
+
+    fun redactSecrets(text: String): String {
+        if (text.isEmpty()) return text
+        var out = SK_TOKEN.replace(text, "sk-‹redacted›")
+        for (re in OTHER_SECRET_TOKENS) out = re.replace(out, "‹redacted›")
+        return out
+    }
+
     /** A single property descriptor, e.g. prop("string", "the text to type"). */
     fun prop(type: String, description: String): JSONObject {
         return JSONObject().apply {
@@ -73,7 +111,7 @@ internal object ToolSupport {
     fun readPrunedNodes(service: AgentAccessibilityService?): List<UiNode> {
         if (service == null) return emptyList()
         val raw = UiTreeParser.parse(service.getRootNode())
-        return UiNodePruner.prune(raw).nodes
+        return UiNodePruner.prune(raw, maxNodes = OBSERVATION_NODE_CAP).nodes
     }
 
     /**
@@ -81,23 +119,28 @@ internal object ToolSupport {
      * Uses Rect field arithmetic only (no Rect helper methods) so the same render
      * path is safe to exercise from JVM unit tests.
      */
-    fun renderNodes(nodes: List<UiNode>, maxNodes: Int = 40): String {
+    fun renderNodes(nodes: List<UiNode>, maxNodes: Int = OBSERVATION_NODE_CAP): String {
         if (nodes.isEmpty()) return "(no readable UI nodes)"
         val sb = StringBuilder()
         sb.append("UI nodes (").append(minOf(nodes.size, maxNodes)).append("):\n")
         for (node in nodes.take(maxNodes)) {
             val type = node.className.substringAfterLast('.')
-            val label = buildString {
-                if (node.text.isNotBlank()) append('"').append(node.text).append('"')
+            // Password/secure fields: never forward the actual on-screen value to the
+            // model. Keep the field visible (so the agent can target it) but mask text.
+            val label = if (node.isPassword) {
+                "\"‹password›\""
+            } else buildString {
+                if (node.text.isNotBlank()) append('"').append(redactSecrets(node.text)).append('"')
                 if (node.contentDesc.isNotBlank()) {
                     if (isNotEmpty()) append(' ')
-                    append("desc=\"").append(node.contentDesc).append('"')
+                    append("desc=\"").append(redactSecrets(node.contentDesc)).append('"')
                 }
             }.ifBlank { "(no text)" }
             val attrs = buildList {
                 if (node.isClickable) add("clickable")
                 if (node.isEditable) add("editable")
                 if (node.isScrollable) add("scrollable")
+                if (node.isPassword) add("password")
             }.joinToString(",")
             sb.append('[').append(node.index).append("] ")
                 .append(type).append(' ').append(label)

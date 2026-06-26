@@ -103,6 +103,8 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // Shizuku UserService IPC is defined via AIDL (IShizukuUserService.aidl).
+        aidl = true
     }
 }
 
@@ -116,13 +118,20 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // EncryptedSharedPreferences (Keystore-backed) for the on-device model API key.
+    implementation(libs.androidx.security.crypto)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+    // Shizuku: ADB/root-privileged operations via a bound UserService (true device-admin power).
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
     testImplementation(libs.junit)
     // android.jar stubs org.json to throw "not mocked" in local JVM unit tests;
     // the real reference implementation lets schema/JSON tests run on the JVM.
     testImplementation(libs.json)
+    // runTest + virtual time for the suspend gesture bridge in ToolSupport.
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -10,6 +10,9 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 
+/** <think>…</think> reasoning block some endpoints inline into message content. */
+private val THINK_BLOCK = Regex("<think>.*?</think>", RegexOption.DOT_MATCHES_ALL)
+
 /**
  * Device-direct turn client: drives one agent-loop turn by calling the user's
  * own OpenAI-compatible `/chat/completions` endpoint with real function calling.
@@ -37,6 +40,7 @@ class DirectOpenAiTurnClient(private val config: EndpointConfig) : TurnClient {
     ): AgentTurnResponse {
         val url = URL("${config.normalizedBaseUrl()}/chat/completions")
         requireSecureUrl(url)
+        val started = System.currentTimeMillis()
 
         val payload = JSONObject().apply {
             put("model", config.model)
@@ -58,7 +62,7 @@ class DirectOpenAiTurnClient(private val config: EndpointConfig) : TurnClient {
                 val body = withTimeout(timeoutMs.toLong() + 5_000L) {
                     runInterruptible(Dispatchers.IO) { postJson(url, payloadText) }
                 }
-                return parseResponse(traceId, body)
+                return parseResponse(traceId, body, (System.currentTimeMillis() - started).toInt())
             } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
                 lastError = timeout
             } catch (cancel: kotlinx.coroutines.CancellationException) {
@@ -78,7 +82,7 @@ class DirectOpenAiTurnClient(private val config: EndpointConfig) : TurnClient {
      * immediately followed by the matching `function` turn (agent-loop.md §2), so
      * tool-call ids are paired positionally with a FIFO queue.
      */
-    private fun buildMessages(systemInstruction: String, contents: JSONArray): JSONArray {
+    internal fun buildMessages(systemInstruction: String, contents: JSONArray): JSONArray {
         val messages = JSONArray()
         if (systemInstruction.isNotBlank()) {
             messages.put(JSONObject().put("role", "system").put("content", systemInstruction))
@@ -221,13 +225,13 @@ class DirectOpenAiTurnClient(private val config: EndpointConfig) : TurnClient {
         }
     }
 
-    private fun parseResponse(traceId: String, body: String): AgentTurnResponse {
+    private fun parseResponse(traceId: String, body: String, latencyMs: Int): AgentTurnResponse {
         val root = JSONObject(body)
         val choice = root.optJSONArray("choices")?.optJSONObject(0) ?: JSONObject()
         val message = choice.optJSONObject("message") ?: JSONObject()
         val finishReason = choice.optString("finish_reason", "")
 
-        val text = message.optString("content", "").takeIf { it.isNotBlank() }
+        val text = stripThink(message.optString("content", "")).takeIf { it.isNotBlank() }
 
         val toolCalls = mutableListOf<TurnToolCall>()
         val rawCalls = message.optJSONArray("tool_calls")
@@ -250,12 +254,26 @@ class DirectOpenAiTurnClient(private val config: EndpointConfig) : TurnClient {
         return AgentTurnResponse(
             traceId = traceId,
             model = modelName,
-            latencyMs = 0,
+            latencyMs = latencyMs,
             text = text,
             toolCalls = toolCalls,
             finished = if (truncated) false else toolCalls.isEmpty(),
             meta = TurnMeta(truncated = truncated),
         )
+    }
+
+    /**
+     * Strip <think>…</think> reasoning blocks. Some OpenAI-compatible endpoints inline the
+     * model's chain-of-thought into `content`; left in, it shows raw "<think>" in the UI and
+     * bloats the history fed back next turn. We keep only the model's actual answer text.
+     */
+    private fun stripThink(content: String): String {
+        if (content.isEmpty()) return content
+        var s = THINK_BLOCK.replace(content, "")
+        // An unclosed <think> (e.g. truncated output): drop from the tag to the end.
+        val open = s.indexOf("<think>")
+        if (open >= 0) s = s.substring(0, open)
+        return s.trim()
     }
 
     /** OpenAI returns tool-call arguments as a JSON string; tolerate an object too. */

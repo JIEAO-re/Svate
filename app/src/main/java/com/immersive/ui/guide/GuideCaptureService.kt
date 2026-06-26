@@ -19,12 +19,13 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Base64
+import android.view.Display
+import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.immersive.ui.R
 import com.immersive.ui.overlay.OverlayGuideService
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 class GuideCaptureService : Service() {
@@ -56,6 +57,24 @@ class GuideCaptureService : Service() {
     private var width: Int = 0
     private var height: Int = 0
     private var density: Int = 0
+    private var displayManager: DisplayManager? = null
+
+    /**
+     * The VirtualDisplay/ImageReader are pinned to the size captured at startProjection()
+     * time. After a rotation the mirrored frame keeps the old dimensions while the live
+     * screen (and OverlayGuideService, which maps the AI bbox against getScreenSize())
+     * reports the rotated bounds, so the highlight box lands in the wrong place. Resize
+     * the surface to follow the live geometry. Registered on mainHandler, so this runs on
+     * the same thread as captureAndAnalyzeFrame and cannot interleave with a frame copy.
+     */
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId != Display.DEFAULT_DISPLAY) return
+            resizeCaptureIfNeeded()
+        }
+    }
 
     private var targetAppName: String = "目标应用"
     private var inferredGoal: String = ""
@@ -130,10 +149,10 @@ class GuideCaptureService : Service() {
             // Required on API 34+ before createVirtualDisplay (see projectionCallback).
             projection?.registerCallback(projectionCallback, mainHandler)
 
-            val metrics = resources.displayMetrics
-            width = max(720, metrics.widthPixels)
-            height = max(1280, metrics.heightPixels)
-            density = metrics.densityDpi
+            val (w, h) = currentDisplaySize()
+            width = w
+            height = h
+            density = resources.displayMetrics.densityDpi
 
             imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             virtualDisplay = projection?.createVirtualDisplay(
@@ -146,6 +165,11 @@ class GuideCaptureService : Service() {
                 null,
                 null,
             )
+
+            // Follow rotation/resize so the captured frame matches the live screen.
+            displayManager = (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).also {
+                it.registerDisplayListener(displayListener, mainHandler)
+            }
             virtualDisplay != null
         } catch (t: Throwable) {
             android.util.Log.e("GuideCaptureService", "startProjection failed", t)
@@ -154,7 +178,50 @@ class GuideCaptureService : Service() {
         }
     }
 
+    /**
+     * Recreate the ImageReader and resize the VirtualDisplay to the live display size when
+     * it changed (rotation). Runs on mainHandler, the same thread as captureAndAnalyzeFrame,
+     * so no in-flight frame copy can observe a half-swapped reader.
+     */
+    private fun resizeCaptureIfNeeded() {
+        val display = virtualDisplay ?: return
+        val (w, h) = currentDisplaySize()
+        if (w == width && h == height) return
+        try {
+            val oldReader = imageReader
+            val newReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+            // Detach the old surface before resizing, then attach the new one, so the old
+            // reader is no longer the display target by the time it is closed.
+            display.surface = null
+            display.resize(w, h, density)
+            display.surface = newReader.surface
+            imageReader = newReader
+            width = w
+            height = h
+            oldReader?.close()
+            android.util.Log.d("GuideCaptureService", "capture surface resized to ${w}x$h")
+        } catch (t: Throwable) {
+            android.util.Log.e("GuideCaptureService", "resizeCaptureIfNeeded failed", t)
+        }
+    }
+
+    /**
+     * Live full-screen size in pixels, matching OverlayGuideService.getScreenSize()
+     * (WindowManager.currentWindowMetrics.bounds) so the captured frame and the bbox
+     * mapping share one coordinate space. minSdk is 33, so this API is always present.
+     */
+    private fun currentDisplaySize(): Pair<Int, Int> {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val bounds = wm.currentWindowMetrics.bounds
+        return bounds.width() to bounds.height()
+    }
+
     private fun stopProjection() {
+        try {
+            displayManager?.unregisterDisplayListener(displayListener)
+        } catch (_: Throwable) {
+        }
+        displayManager = null
         virtualDisplay?.release()
         virtualDisplay = null
         imageReader?.close()

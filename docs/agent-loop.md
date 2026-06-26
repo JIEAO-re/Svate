@@ -1,13 +1,14 @@
 # Agent Loop (phase: claude-code-style on-device tool loop)
 
-This document is the single source of truth for the new **on-device, model-driven
-tool loop** that runs alongside the existing fixed pipeline (`OpenClawOrchestrator`).
-It mirrors the Claude Code architecture: the loop lives on the device, the model is
-remote, and every tool call passes through a permission gate (ask / auto, plus an
-always-on high-risk denylist).
+This document is the single source of truth for the **on-device, model-driven
+tool loop**, which is now the sole agent engine on the device. It mirrors the
+Claude Code architecture: the loop lives on the device, the model is remote, and
+every tool call passes through a permission gate (ask / auto, plus an always-on
+high-risk denylist).
 
-The legacy pipeline is **not** removed. The agent loop is a new mode selectable
-from the UI; the old pipeline stays as a tested fallback.
+The legacy fixed pipeline (`OpenClawOrchestrator`) has been **removed**; the agent
+loop fully replaces it. Autonomous "start guide" now routes to the loop, while the
+separate assist-mode overlay guide remains.
 
 ## 1. Roles
 
@@ -104,6 +105,7 @@ Each tool has: stable `name`, human description, JSON-schema params, an
 | open_app       | {app_name?, package?}                    | no       | normal    | ExecutionModule / IntentResolver-equiv |
 | launch_intent  | {action, uri?, package?}                 | no       | high      | IntentGuard (whitelist) |
 | wait           | {ms}                                     | yes      | safe      | delay |
+| web_search     | {query, max_results?}                    | yes      | safe      | WebSearchTool (Tavily/Brave/SearXNG) |
 | finish         | {summary, success}                       | yes      | safe      | terminates the loop |
 | ask_user       | {question}                               | yes      | safe      | pauses loop for user input |
 

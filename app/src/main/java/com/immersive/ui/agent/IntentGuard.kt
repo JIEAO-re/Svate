@@ -40,6 +40,11 @@ object IntentGuard {
         "支付", "转账", "付款", "购买", "充值",
     )
 
+    // Word-boundary matchers shared with AgentActionSafety so "pay" matches the
+    // standalone word but not "display"/"prepay"; CJK keeps substring matching.
+    private val HARD_BLOCKED_KEYWORD_MATCHERS =
+        AgentActionSafety.buildKeywordMatchers(HARD_BLOCKED_KEYWORDS)
+
     fun validate(
         spec: IntentSpec?,
         fallbackPackage: String? = null,
@@ -131,9 +136,6 @@ object IntentGuard {
         return intent
     }
 
-    private fun containsBlockedKeyword(text: String): Boolean {
-        if (text.isBlank()) return false
-        val lower = text.lowercase()
-        return HARD_BLOCKED_KEYWORDS.any { keyword -> lower.contains(keyword.lowercase()) }
-    }
+    private fun containsBlockedKeyword(text: String): Boolean =
+        AgentActionSafety.matchesAnyKeyword(text, HARD_BLOCKED_KEYWORD_MATCHERS)
 }

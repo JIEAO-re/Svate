@@ -6,6 +6,7 @@ import {
   OPENAI_COMPAT_API_KEY,
   PLANNER_MODEL,
 } from "@/lib/mobile-agent/env";
+import { AgentTurnResponseSchema } from "@/lib/schemas/agent-turn";
 import type {
   AgentContent,
   AgentTurnRequest,
@@ -363,13 +364,24 @@ export async function runAgentTurn(request: AgentTurnRequest): Promise<AgentTurn
   const resolvedModel = await resolveModelWithFallback(PLANNER_MODEL, [FALLBACK_MODEL]);
 
   // OpenAI-compatible gateway (base_url + api key): drive the loop with genuine
-  // function calling over Chat Completions.
-  if (OPENAI_COMPAT_ENABLED) {
-    return runAgentTurnViaOpenAI(request, resolvedModel, started);
-  }
+  // function calling over Chat Completions. Otherwise use the Gemini path.
+  const result = OPENAI_COMPAT_ENABLED
+    ? await runAgentTurnViaOpenAI(request, resolvedModel, started)
+    : await runAgentTurnViaGemini(request, resolvedModel, started);
 
-  // Gemini path: forward the conversation with function calling enabled and map
-  // the candidate's functionCall parts to assistant.tool_calls.
+  // Validate the outgoing turn against the wire contract before it leaves the
+  // server, mirroring the pipeline's NextStepResponseSchema.parse so both model
+  // proxy paths enforce their response shape rather than returning it unchecked.
+  return AgentTurnResponseSchema.parse(result);
+}
+
+// Gemini path: forward the conversation with function calling enabled and map
+// the candidate's functionCall parts to assistant.tool_calls.
+async function runAgentTurnViaGemini(
+  request: AgentTurnRequest,
+  resolvedModel: string,
+  started: number,
+): Promise<AgentTurnResponse> {
   const ai = getGenAIClient();
   const contents = request.contents.map(mapContentToGemini);
   const systemInstruction = request.system_instruction.trim()
